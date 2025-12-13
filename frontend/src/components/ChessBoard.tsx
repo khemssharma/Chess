@@ -96,7 +96,8 @@ export const ChessBoard = ({
     // Flip board if player is black
     const displayBoard = playerColor === "black" ? [...board].reverse().map(row => [...row].reverse()) : board;
 
-    return <div className="text-white-200">
+    return <div className="text-white-200 w-full">
+        <div className="w-full aspect-square max-w-md mx-auto">
         {displayBoard.map((row, i) => {
             return <div key={i} className="flex">
                 {row.map((square, j) => {
@@ -175,11 +176,11 @@ export const ChessBoard = ({
                             }
                         }} 
                         key={j} 
-                        className={`w-16 h-16 ${bgColor} relative cursor-pointer`}
+                        className={`w-full aspect-square ${bgColor} relative cursor-pointer`}
                     >
                         <div className="w-full justify-center flex h-full">
                             <div className="h-full justify-center flex flex-col">
-                                {square ? <img className="w-4" src={`/${square?.color === "b" ? square?.type : `${square?.type?.toUpperCase()} copy`}.png`} /> : null}
+                                {square ? <img className="w-3/4 md:w-4/5" src={`/${square?.color === "b" ? square?.type : `${square?.type?.toUpperCase()} copy`}.png`} /> : null}
                             </div>
                         </div>
                         
@@ -188,10 +189,10 @@ export const ChessBoard = ({
                             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                                 {square ? (
                                     // If there's a piece on this square (capture), show a ring
-                                    <div className="w-14 h-14 border-4 border-red-500 rounded-full opacity-60"></div>
+                                    <div className="w-11/12 aspect-square border-2 md:border-4 border-red-500 rounded-full opacity-60"></div>
                                 ) : (
                                     // If empty square, show a dot
-                                    <div className="w-4 h-4 bg-gray-800 rounded-full opacity-60"></div>
+                                    <div className="w-1/4 aspect-square bg-gray-800 rounded-full opacity-60"></div>
                                 )}
                             </div>
                         )}
@@ -199,36 +200,37 @@ export const ChessBoard = ({
                 })}
             </div>
         })}
+        </div>
         
         {/* Promotion Dialog */}
         {showPromotion && (
-            <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
-                <div className="bg-white p-6 rounded-lg shadow-2xl">
-                    <h3 className="text-black text-xl font-bold mb-4 text-center">Choose Promotion</h3>
-                    <div className="flex gap-4">
+            <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+                <div className="bg-white p-4 md:p-6 rounded-lg shadow-2xl mx-4">
+                    <h3 className="text-black text-lg md:text-xl font-bold mb-3 md:mb-4 text-center">Choose Promotion</h3>
+                    <div className="flex gap-2 md:gap-4">
                         <button 
                             onClick={() => handlePromotion('q')}
-                            className="w-20 h-20 bg-green-500 hover:bg-green-600 rounded-lg flex items-center justify-center border-4 border-green-700 transition-all hover:scale-110"
+                            className="w-14 h-14 md:w-20 md:h-20 bg-green-500 hover:bg-green-600 rounded-lg flex items-center justify-center border-2 md:border-4 border-green-700 transition-all hover:scale-110"
                         >
-                            <img src={`/${playerColor === "white" ? "Q copy" : "q"}.png`} alt="Queen" className="w-14" />
+                            <img src={`/${playerColor === "white" ? "Q copy" : "q"}.png`} alt="Queen" className="w-10 md:w-14" />
                         </button>
                         <button 
                             onClick={() => handlePromotion('r')}
-                            className="w-20 h-20 bg-blue-500 hover:bg-blue-600 rounded-lg flex items-center justify-center border-4 border-blue-700 transition-all hover:scale-110"
+                            className="w-14 h-14 md:w-20 md:h-20 bg-blue-500 hover:bg-blue-600 rounded-lg flex items-center justify-center border-2 md:border-4 border-blue-700 transition-all hover:scale-110"
                         >
-                            <img src={`/${playerColor === "white" ? "R copy" : "r"}.png`} alt="Rook" className="w-14" />
+                            <img src={`/${playerColor === "white" ? "R copy" : "r"}.png`} alt="Rook" className="w-10 md:w-14" />
                         </button>
                         <button 
                             onClick={() => handlePromotion('b')}
-                            className="w-20 h-20 bg-purple-500 hover:bg-purple-600 rounded-lg flex items-center justify-center border-4 border-purple-700 transition-all hover:scale-110"
+                            className="w-14 h-14 md:w-20 md:h-20 bg-purple-500 hover:bg-purple-600 rounded-lg flex items-center justify-center border-2 md:border-4 border-purple-700 transition-all hover:scale-110"
                         >
-                            <img src={`/${playerColor === "white" ? "B copy" : "b"}.png`} alt="Bishop" className="w-14" />
+                            <img src={`/${playerColor === "white" ? "B copy" : "b"}.png`} alt="Bishop" className="w-10 md:w-14" />
                         </button>
                         <button 
                             onClick={() => handlePromotion('n')}
-                            className="w-20 h-20 bg-orange-500 hover:bg-orange-600 rounded-lg flex items-center justify-center border-4 border-orange-700 transition-all hover:scale-110"
+                            className="w-14 h-14 md:w-20 md:h-20 bg-orange-500 hover:bg-orange-600 rounded-lg flex items-center justify-center border-2 md:border-4 border-orange-700 transition-all hover:scale-110"
                         >
-                            <img src={`/${playerColor === "white" ? "N copy" : "n"}.png`} alt="Knight" className="w-14" />
+                            <img src={`/${playerColor === "white" ? "N copy" : "n"}.png`} alt="Knight" className="w-10 md:w-14" />
                         </button>
                     </div>
                 </div>

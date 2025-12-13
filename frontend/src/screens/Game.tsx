@@ -79,11 +79,11 @@ export const Game = () => {
 
     if (!socket) return <div>Connecting...</div>
 
-    return <div className="justify-center flex">
-        <div className="pt-8 max-w-screen-lg w-full">
-            <div className="grid grid-cols-6 gap-4 w-full">
-                <div className="col-span-4 w-full flex justify-center">
-                    <div className="relative">
+    return <div className="justify-center flex min-h-screen bg-slate-800">
+        <div className="pt-4 md:pt-8 w-full px-2 md:px-4 max-w-screen-lg">
+            <div className="grid grid-cols-1 md:grid-cols-6 gap-4 w-full">
+                <div className="md:col-span-4 w-full flex justify-center">
+                    <div className="relative w-full max-w-md">
                         <ChessBoard 
                             chess={chess} 
                             setBoard={setBoard} 
@@ -97,9 +97,9 @@ export const Game = () => {
                         {/* Game Over Overlay */}
                         {gameOver && (
                             <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
-                                <div className="bg-white text-black p-8 rounded-lg text-center">
-                                    <h2 className="text-3xl font-bold mb-4">Checkmate!</h2>
-                                    <p className="text-xl mb-4">
+                                <div className="bg-white text-black p-4 md:p-8 rounded-lg text-center mx-4">
+                                    <h2 className="text-2xl md:text-3xl font-bold mb-2 md:mb-4">Checkmate!</h2>
+                                    <p className="text-lg md:text-xl mb-3 md:mb-4">
                                         {winner === playerColor ? "You won! 🎉" : `${winner?.charAt(0).toUpperCase()}${winner?.slice(1)} wins!`}
                                     </p>
                                     <button 
@@ -113,8 +113,8 @@ export const Game = () => {
                         )}
                     </div>
                 </div>
-                <div className="col-span-2 bg-slate-900 w-full flex justify-center">
-                    <div className="pt-8">
+                <div className="md:col-span-2 bg-slate-900 w-full flex justify-center py-4 md:py-0">
+                    <div className="md:pt-8">
                         {!started && !searching && (
                             <Button onClick={() => {
                                 setSearching(true);
