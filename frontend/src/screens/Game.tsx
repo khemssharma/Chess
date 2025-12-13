@@ -79,10 +79,10 @@ export const Game = () => {
 
     if (!socket) return <div>Connecting...</div>
 
-    return <div className="justify-center flex min-h-screen bg-slate-800">
+    return <div className="justify-center flex min-h-screen bg-slate-800 overflow-x-hidden">
         <div className="pt-4 md:pt-8 w-full px-2 md:px-4 max-w-screen-lg">
             <div className="grid grid-cols-1 md:grid-cols-6 gap-4 w-full">
-                <div className="md:col-span-4 w-full flex justify-center">
+                <div className="md:col-span-4 w-full flex justify-center overflow-hidden">
                     <div className="relative w-full max-w-md">
                         <ChessBoard 
                             chess={chess} 
@@ -92,6 +92,7 @@ export const Game = () => {
                             validMoves={validMoves}
                             onSquareClick={requestValidMoves}
                             playerColor={playerColor}
+                            disabled={!started}
                         />
                         
                         {/* Game Over Overlay */}

@@ -9,7 +9,8 @@ export const ChessBoard = ({
     setBoard,
     validMoves,
     onSquareClick,
-    playerColor = "white"
+    playerColor = "white",
+    disabled = false
 }: {
     chess: Chess;
     setBoard: React.Dispatch<React.SetStateAction<({
@@ -26,6 +27,7 @@ export const ChessBoard = ({
     validMoves?: Array<{from: string, to: string, promotion?: string}>;
     onSquareClick?: (square: string) => void;
     playerColor?: "white" | "black";
+    disabled?: boolean;
 }) => {
     const [from, setFrom] = useState<null | Square>(null);
     const [showPromotion, setShowPromotion] = useState(false);
@@ -117,6 +119,8 @@ export const ChessBoard = ({
 
                     return <div 
                         onClick={() => {
+                            if (disabled) return; // Prevent interaction when disabled
+                            
                             if (!from) {
                                 // Only allow selecting pieces that belong to the current player
                                 if (!isPlayerPiece(squareRepresentation)) {
@@ -176,11 +180,11 @@ export const ChessBoard = ({
                             }
                         }} 
                         key={j} 
-                        className={`w-full aspect-square ${bgColor} relative cursor-pointer`}
+                        className={`w-full aspect-square ${bgColor} relative ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                     >
                         <div className="w-full justify-center flex h-full">
                             <div className="h-full justify-center flex flex-col">
-                                {square ? <img className="w-3/4 md:w-4/5" src={`/${square?.color === "b" ? square?.type : `${square?.type?.toUpperCase()} copy`}.png`} /> : null}
+                                {square ? <img className="w-1/2 md:w-3/5" src={`/${square?.color === "b" ? square?.type : `${square?.type?.toUpperCase()} copy`}.png`} /> : null}
                             </div>
                         </div>
                         
@@ -189,10 +193,10 @@ export const ChessBoard = ({
                             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                                 {square ? (
                                     // If there's a piece on this square (capture), show a ring
-                                    <div className="w-11/12 aspect-square border-2 md:border-4 border-red-500 rounded-full opacity-60"></div>
+                                    <div className="w-4/5 aspect-square border-2 md:border-3 border-red-500 rounded-full opacity-60"></div>
                                 ) : (
                                     // If empty square, show a dot
-                                    <div className="w-1/4 aspect-square bg-gray-800 rounded-full opacity-60"></div>
+                                    <div className="w-1/5 aspect-square bg-gray-800 rounded-full opacity-60"></div>
                                 )}
                             </div>
                         )}
