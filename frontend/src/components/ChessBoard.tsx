@@ -28,6 +28,8 @@ export const ChessBoard = ({
     playerColor?: "white" | "black";
 }) => {
     const [from, setFrom] = useState<null | Square>(null);
+    const [showPromotion, setShowPromotion] = useState(false);
+    const [promotionMove, setPromotionMove] = useState<{from: Square, to: Square} | null>(null);
 
     // Helper function to check if a piece belongs to the current player
     const isPlayerPiece = (square: Square) => {
@@ -35,6 +37,49 @@ export const ChessBoard = ({
         if (!piece) return false;
         const pieceColor = piece.color === 'w' ? 'white' : 'black';
         return pieceColor === playerColor;
+    };
+
+    // Helper function to check if a move is a pawn promotion
+    const isPawnPromotion = (from: Square, to: Square) => {
+        const piece = chess.get(from);
+        if (!piece || piece.type !== 'p') return false;
+        
+        const toRank = parseInt(to[1]);
+        return (piece.color === 'w' && toRank === 8) || (piece.color === 'b' && toRank === 1);
+    };
+
+    // Handle promotion piece selection
+    const handlePromotion = (piece: 'q' | 'r' | 'b' | 'n') => {
+        if (!promotionMove) return;
+
+        // Send move to server with promotion
+        socket.send(JSON.stringify({
+            type: MOVE,
+            payload: {
+                move: {
+                    from: promotionMove.from,
+                    to: promotionMove.to,
+                    promotion: piece
+                }
+            }
+        }));
+
+        // Make move locally
+        try {
+            chess.move({
+                from: promotionMove.from,
+                to: promotionMove.to,
+                promotion: piece
+            });
+            setBoard(chess.board());
+        } catch (e) {
+            console.log("Invalid promotion move");
+        }
+
+        // Reset states
+        setShowPromotion(false);
+        setPromotionMove(null);
+        setFrom(null);
     };
 
     // Check if a square is a valid move destination
@@ -89,6 +134,13 @@ export const ChessBoard = ({
                                     if (onSquareClick) {
                                         onSquareClick(''); // Clear valid moves
                                     }
+                                    return;
+                                }
+
+                                // Check if this is a pawn promotion
+                                if (isPawnPromotion(from, squareRepresentation)) {
+                                    setPromotionMove({ from, to: squareRepresentation });
+                                    setShowPromotion(true);
                                     return;
                                 }
 
@@ -147,5 +199,40 @@ export const ChessBoard = ({
                 })}
             </div>
         })}
+        
+        {/* Promotion Dialog */}
+        {showPromotion && (
+            <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
+                <div className="bg-white p-6 rounded-lg shadow-2xl">
+                    <h3 className="text-black text-xl font-bold mb-4 text-center">Choose Promotion</h3>
+                    <div className="flex gap-4">
+                        <button 
+                            onClick={() => handlePromotion('q')}
+                            className="w-20 h-20 bg-green-500 hover:bg-green-600 rounded-lg flex items-center justify-center border-4 border-green-700 transition-all hover:scale-110"
+                        >
+                            <img src={`/${playerColor === "white" ? "Q copy" : "q"}.png`} alt="Queen" className="w-14" />
+                        </button>
+                        <button 
+                            onClick={() => handlePromotion('r')}
+                            className="w-20 h-20 bg-blue-500 hover:bg-blue-600 rounded-lg flex items-center justify-center border-4 border-blue-700 transition-all hover:scale-110"
+                        >
+                            <img src={`/${playerColor === "white" ? "R copy" : "r"}.png`} alt="Rook" className="w-14" />
+                        </button>
+                        <button 
+                            onClick={() => handlePromotion('b')}
+                            className="w-20 h-20 bg-purple-500 hover:bg-purple-600 rounded-lg flex items-center justify-center border-4 border-purple-700 transition-all hover:scale-110"
+                        >
+                            <img src={`/${playerColor === "white" ? "B copy" : "b"}.png`} alt="Bishop" className="w-14" />
+                        </button>
+                        <button 
+                            onClick={() => handlePromotion('n')}
+                            className="w-20 h-20 bg-orange-500 hover:bg-orange-600 rounded-lg flex items-center justify-center border-4 border-orange-700 transition-all hover:scale-110"
+                        >
+                            <img src={`/${playerColor === "white" ? "N copy" : "n"}.png`} alt="Knight" className="w-14" />
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
     </div>
 }
