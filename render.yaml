@@ -1,0 +1,23 @@
+services:
+  - type: web_service
+    name: chess-backend
+    env: node
+    region: oregon
+    branch: main
+    workingDirectory: backend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+  - type: static_site
+    name: chess-frontend
+    env: static
+    region: oregon
+    branch: main
+    workingDirectory: frontend
+    buildCommand: npm install && npm run build
+    publishPath: dist
+    envVars:
+      - key: VITE_WS_URL
+        value: wss://chess-backend.onrender.com
