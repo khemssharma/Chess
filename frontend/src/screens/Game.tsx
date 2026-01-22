@@ -77,7 +77,7 @@ export const Game = () => {
         }
     };
 
-    if (!socket) return <div>Connecting...</div>
+    if (!socket) return <div className="text-white">Connecting To Server. Please wait...</div>
 
     return <div className="justify-center flex min-h-screen bg-slate-800 overflow-x-hidden">
         <div className="pt-4 md:pt-8 w-full px-2 md:px-4 max-w-screen-lg">
