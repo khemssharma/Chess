@@ -5,3 +5,5 @@
 ## Bugs
 1. Moves aren't being stored neither in Local Storage or Database. (will result in progress loss if page is refreshed.) 
 2. Implement Auth and Chat for better engagement.
+## Screenshot
+![Screenshot](realtime-play.png)
