@@ -2,16 +2,19 @@ import { WebSocket } from "ws";
 import { INIT_GAME, MOVE, GET_VALID_MOVES } from "./messages";
 import { Game } from "./Game";
 
+interface PendingPlayer {
+    socket: WebSocket;
+    timeControl: number | null;
+}
+
 export class GameManager {
     private games: Game[];
-    private pendingUser: WebSocket | null;
-    private pendingUserTimeControl: number | null;
+    private pendingUsers: Map<string, PendingPlayer>; // Key is timeControl as string
     private users: WebSocket[];
 
     constructor() {
         this.games = [];
-        this.pendingUser = null;
-        this.pendingUserTimeControl = null;
+        this.pendingUsers = new Map();
         this.users = [];
     }
 
@@ -23,10 +26,13 @@ export class GameManager {
     removeUser(socket: WebSocket) {
         this.users = this.users.filter(user => user !== socket);
         
-        // If the pending user disconnects, clear them
-        if (this.pendingUser === socket) {
-            this.pendingUser = null;
-            this.pendingUserTimeControl = null;
+        // Remove from pending users if they were waiting
+        for (const [key, pending] of this.pendingUsers.entries()) {
+            if (pending.socket === socket) {
+                this.pendingUsers.delete(key);
+                console.log(`Removed pending user with time control: ${key}`);
+                break;
+            }
         }
         
         // Find and cleanup any game this user was in
@@ -53,36 +59,57 @@ export class GameManager {
 
             if (message.type === INIT_GAME) {
                 // Get time control from message payload
-                // If timeControl is explicitly null or undefined, use null (no time limit)
-                // Otherwise use the provided value or default to 10
                 let timeControl: number | null = null;
                 if (message.payload && message.payload.timeControl !== undefined && message.payload.timeControl !== null) {
                     timeControl = message.payload.timeControl;
-                } else if (!message.payload || message.payload.timeControl === undefined) {
-                    // Default to 10 minutes if no payload provided at all
-                    timeControl = 10;
                 }
                 
                 console.log("Player requesting game with time control:", timeControl);
                 
-                if (this.pendingUser) {
-                    // Create game with the requested time control (use the first player's preference)
-                    const pendingTimeControl = this.pendingUserTimeControl;
-                    console.log("Creating game with time control:", pendingTimeControl);
+                // Create a key for this time control (convert to string for Map key)
+                const timeControlKey = timeControl === null ? "unlimited" : timeControl.toString();
+                
+                console.log("Looking for pending player with key:", timeControlKey);
+                console.log("Current pending users:", Array.from(this.pendingUsers.keys()));
+                
+                // Check if there's a pending user with the same time control
+                const pendingPlayer = this.pendingUsers.get(timeControlKey);
+                
+                if (pendingPlayer && pendingPlayer.socket !== socket) {
+                    // Match found! Create game with matching time control
+                    console.log("Match found! Creating game with time control:", timeControl);
                     
-                    const game = new Game(this.pendingUser, socket, pendingTimeControl);
+                    // Remove from pending BEFORE creating game
+                    this.pendingUsers.delete(timeControlKey);
+                    
+                    const game = new Game(pendingPlayer.socket, socket, timeControl);
                     this.games.push(game);
-                    this.pendingUser = null;
-                    this.pendingUserTimeControl = null;
-                } else {
-                    this.pendingUser = socket;
-                    this.pendingUserTimeControl = timeControl;
                     
-                    // Optionally send a waiting message
+                    console.log("Game created successfully");
+                } else {
+                    // No match found, add this player to pending users
+                    console.log("No match found. Adding to pending users with time control:", timeControl);
+                    
+                    // Make sure to remove this socket from any other pending queues first
+                    for (const [key, pending] of this.pendingUsers.entries()) {
+                        if (pending.socket === socket) {
+                            this.pendingUsers.delete(key);
+                            console.log(`Removed socket from previous queue: ${key}`);
+                        }
+                    }
+                    
+                    this.pendingUsers.set(timeControlKey, {
+                        socket: socket,
+                        timeControl: timeControl
+                    });
+                    
+                    console.log("Added to pending users. Total pending:", this.pendingUsers.size);
+                    
+                    // Send waiting message
                     socket.send(JSON.stringify({
                         type: "WAITING",
                         payload: {
-                            message: "Waiting for opponent...",
+                            message: "Waiting for opponent with same time control...",
                             timeControl: timeControl
                         }
                     }));

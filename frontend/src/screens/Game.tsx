@@ -21,7 +21,7 @@ interface InitGamePayload {
 
 export const Game = () => {
     const socket = useSocket();
-    const [chess] = useState(new Chess());
+    const [chess, setChess] = useState(new Chess());
     const [board, setBoard] = useState(chess.board());
     const [started, setStarted] = useState(false);
     const [validMoves, setValidMoves] = useState<Array<{from: string, to: string, promotion?: string}>>([]);
@@ -120,6 +120,23 @@ export const Game = () => {
         return `${minutes}:${seconds.toString().padStart(2, '0')}`;
     };
 
+    // Reset game state
+    const resetGame = () => {
+        const newChess = new Chess();
+        setChess(newChess);
+        setBoard(newChess.board());
+        setStarted(false);
+        setValidMoves([]);
+        setPlayerColor("white");
+        setGameOver(false);
+        setWinner(null);
+        setGameOverReason(null);
+        setSearching(false);
+        setSelectedTimeControl(null);
+        setWhiteTime(null);
+        setBlackTime(null);
+    };
+
     // Start game with selected time control
     const startGame = (timeControl: number | null) => {
         setSearching(true);
@@ -174,18 +191,24 @@ export const Game = () => {
                                 <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
                                     <div className="bg-white text-black p-4 md:p-8 rounded-lg text-center mx-4">
                                         <h2 className="text-2xl md:text-3xl font-bold mb-2 md:mb-4">
-                                            {gameOverReason === "timeout" ? "Time's Up!" : "Checkmate!"}
+                                            {gameOverReason === "timeout" ? "Time's Up!" : 
+                                             gameOverReason === "opponent_disconnected" ? "Opponent Disconnected" :
+                                             "Checkmate!"}
                                         </h2>
                                         <p className="text-lg md:text-xl mb-3 md:mb-4">
-                                            {winner === playerColor ? "You won! 🎉" : `${winner?.charAt(0).toUpperCase()}${winner?.slice(1)} wins!`}
+                                            {gameOverReason === "opponent_disconnected" ? "You win by default!" :
+                                             winner === playerColor ? "You won! 🎉" : 
+                                             `${winner?.charAt(0).toUpperCase()}${winner?.slice(1)} wins!`}
                                         </p>
                                         {gameOverReason && gameOverReason !== "checkmate" && (
                                             <p className="text-sm text-gray-600 mb-3">
-                                                {gameOverReason === "timeout" ? "by timeout" : `by ${gameOverReason}`}
+                                                {gameOverReason === "timeout" ? "by timeout" : 
+                                                 gameOverReason === "opponent_disconnected" ? "opponent left the game" :
+                                                 `by ${gameOverReason}`}
                                             </p>
                                         )}
                                         <button 
-                                            onClick={() => window.location.reload()} 
+                                            onClick={resetGame} 
                                             className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded"
                                         >
                                             Play Again
