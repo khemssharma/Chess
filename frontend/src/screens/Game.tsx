@@ -4,13 +4,17 @@ import { ChessBoard } from "../components/ChessBoard"
 import { useSocket } from "../hooks/useSocket";
 import { Chess } from 'chess.js'
 
-// TODO: Move together, there's code repetition here
 export const INIT_GAME = "init_game";
 export const MOVE = "move";
 export const GAME_OVER = "game_over";
 export const GET_VALID_MOVES = "get_valid_moves";
 export const VALID_MOVES = "valid_moves";
 export const TIME_UPDATE = "time_update";
+export const RECONNECT = "reconnect";
+export const GAME_STATE = "game_state";
+
+const PLAYER_ID_KEY = "chess_player_id";
+const GAME_ID_KEY = "chess_game_id";
 
 interface InitGamePayload {
     type: string;
@@ -31,87 +35,144 @@ export const Game = () => {
     const [gameOverReason, setGameOverReason] = useState<string | null>(null);
     const [searching, setSearching] = useState(false);
     const [selectedTimeControl, setSelectedTimeControl] = useState<number | null>(null);
-    
+    const [reconnecting, setReconnecting] = useState(false);
+
     // Time control state
     const [whiteTime, setWhiteTime] = useState<number | null>(null);
     const [blackTime, setBlackTime] = useState<number | null>(null);
 
+    // On socket connect: attempt reconnect if we have a stored playerId
     useEffect(() => {
-        if (!socket) {
-            return;
+        if (!socket) return;
+
+        const storedPlayerId = localStorage.getItem(PLAYER_ID_KEY);
+        if (storedPlayerId) {
+            console.log("Found stored playerId, attempting reconnect:", storedPlayerId);
+            setReconnecting(true);
+            socket.send(JSON.stringify({
+                type: RECONNECT,
+                payload: { playerId: storedPlayerId }
+            }));
         }
+    }, [socket]);
+
+    useEffect(() => {
+        if (!socket) return;
+
         socket.onmessage = (event) => {
             const message = JSON.parse(event.data);
             console.log("Received message:", message.type, message.payload);
 
             switch (message.type) {
-                case INIT_GAME:
-                    setBoard(chess.board());
+                case INIT_GAME: {
+                    // Fresh game — save playerId and gameId for future reconnects
+                    if (message.payload.playerId) {
+                        localStorage.setItem(PLAYER_ID_KEY, message.payload.playerId);
+                    }
+                    if (message.payload.gameId) {
+                        localStorage.setItem(GAME_ID_KEY, message.payload.gameId);
+                    }
+
+                    const newChess = new Chess();
+                    setChess(newChess);
+                    setBoard(newChess.board());
                     setStarted(true);
                     setSearching(false);
+                    setReconnecting(false);
                     setPlayerColor(message.payload.color);
-                    console.log("Player color:", message.payload.color);
-                    console.log("Time control:", message.payload.timeControl);
-                    
-                    // Initialize time if time control is set
+
                     if (message.payload.timeControl) {
                         const timeInMs = message.payload.timeControl * 60 * 1000;
-                        console.log("Setting initial time:", timeInMs, "ms");
                         setWhiteTime(timeInMs);
                         setBlackTime(timeInMs);
+                        setSelectedTimeControl(message.payload.timeControl);
                     } else {
-                        // No time control - set to null to hide timers
                         setWhiteTime(null);
                         setBlackTime(null);
                     }
                     break;
+                }
+
+                // Restore game state after reconnect (both players back online)
+                case GAME_STATE: {
+                    console.log("Restoring game state from server");
+                    const restored = new Chess(message.payload.fen);
+                    setChess(restored);
+                    setBoard(restored.board());
+                    setStarted(true);
+                    setSearching(false);
+                    setReconnecting(false);
+                    setPlayerColor(message.payload.yourColor);
+                    setSelectedTimeControl(message.payload.timeControl);
+
+                    if (message.payload.whiteTime !== null) {
+                        setWhiteTime(message.payload.whiteTime);
+                        setBlackTime(message.payload.blackTime);
+                    } else {
+                        setWhiteTime(null);
+                        setBlackTime(null);
+                    }
+                    break;
+                }
+
                 case MOVE: {
                     const move = message.payload;
                     chess.move(move);
                     setBoard(chess.board());
-                    setValidMoves([]); // Clear valid moves after a move is made
-                    console.log("Move made");
+                    setValidMoves([]);
                     break;
                 }
+
                 case GAME_OVER:
-                    console.log("Game over");
+                    // Clear stored session on game over
+                    localStorage.removeItem(PLAYER_ID_KEY);
+                    localStorage.removeItem(GAME_ID_KEY);
                     setGameOver(true);
                     setWinner(message.payload.winner);
                     setGameOverReason(message.payload.reason || "checkmate");
                     break;
+
                 case VALID_MOVES:
-                    console.log("Received valid moves for", message.payload.square, ":", message.payload.moves);
                     setValidMoves(message.payload.moves);
                     break;
+
                 case TIME_UPDATE:
-                    console.log("Time update - White:", message.payload.whiteTime, "Black:", message.payload.blackTime);
                     setWhiteTime(message.payload.whiteTime);
                     setBlackTime(message.payload.blackTime);
                     break;
+
+                case "WAITING":
+                    setSearching(true);
+                    setReconnecting(false);
+                    break;
+
+                case "WAITING_FOR_OPPONENT":
+                    // We reconnected but opponent hasn't rejoined yet
+                    setReconnecting(true);
+                    setStarted(false);
+                    break;
+
+                case "NO_GAME":
+                    // No active game found in Redis — clear storage and show lobby
+                    localStorage.removeItem(PLAYER_ID_KEY);
+                    localStorage.removeItem(GAME_ID_KEY);
+                    setReconnecting(false);
+                    break;
+
+                case "OPPONENT_DISCONNECTED":
+                    // Game still alive in Redis, opponent just dropped
+                    // No action needed — game stays on screen
+                    break;
             }
-        }
+        };
     }, [socket, chess]);
 
-    // Function to request valid moves for a square
     const requestValidMoves = (square: string) => {
-        if (socket) {
-            // Clear valid moves if empty square clicked
-            if (!square) {
-                setValidMoves([]);
-                return;
-            }
-            
-            console.log("Requesting valid moves for square:", square);
-            socket.send(JSON.stringify({
-                type: GET_VALID_MOVES,
-                payload: {
-                    square: square
-                }
-            }));
-        }
+        if (!socket) return;
+        if (!square) { setValidMoves([]); return; }
+        socket.send(JSON.stringify({ type: GET_VALID_MOVES, payload: { square } }));
     };
 
-    // Format time in MM:SS format
     const formatTime = (timeInMs: number | null): string => {
         if (timeInMs === null) return "";
         const totalSeconds = Math.max(0, Math.floor(timeInMs / 1000));
@@ -120,8 +181,9 @@ export const Game = () => {
         return `${minutes}:${seconds.toString().padStart(2, '0')}`;
     };
 
-    // Reset game state
     const resetGame = () => {
+        localStorage.removeItem(PLAYER_ID_KEY);
+        localStorage.removeItem(GAME_ID_KEY);
         const newChess = new Chess();
         setChess(newChess);
         setBoard(newChess.board());
@@ -135,21 +197,14 @@ export const Game = () => {
         setSelectedTimeControl(null);
         setWhiteTime(null);
         setBlackTime(null);
+        setReconnecting(false);
     };
 
-    // Start game with selected time control
     const startGame = (timeControl: number | null) => {
         setSearching(true);
         setSelectedTimeControl(timeControl);
-        
-        const payload: InitGamePayload = {
-            type: INIT_GAME
-        };
-        
-        if (timeControl !== null) {
-            payload.payload = { timeControl };
-        }
-        
+        const payload: InitGamePayload = { type: INIT_GAME };
+        if (timeControl !== null) payload.payload = { timeControl };
         socket?.send(JSON.stringify(payload));
     };
 
@@ -165,50 +220,51 @@ export const Game = () => {
                             <div className="flex justify-center">
                                 <div className={`px-6 py-3 rounded-lg font-mono text-2xl font-bold shadow-lg ${
                                     (playerColor === 'white' && chess.turn() === 'b') || (playerColor === 'black' && chess.turn() === 'w')
-                                        ? 'bg-green-600 text-white' 
+                                        ? 'bg-green-600 text-white'
                                         : 'bg-slate-700 text-white'
                                 }`}>
                                     {playerColor === 'white' ? '⚫' : '⚪'} {playerColor === 'white' ? formatTime(blackTime) : formatTime(whiteTime)}
                                 </div>
                             </div>
                         )}
-                        
+
                         {/* Chess Board */}
                         <div className="relative">
-                            <ChessBoard 
-                                chess={chess} 
-                                setBoard={setBoard} 
-                                socket={socket} 
+                            <ChessBoard
+                                chess={chess}
+                                setBoard={setBoard}
+                                socket={socket}
                                 board={board}
                                 validMoves={validMoves}
                                 onSquareClick={requestValidMoves}
                                 playerColor={playerColor}
                                 disabled={!started}
                             />
-                            
+
                             {/* Game Over Overlay */}
                             {gameOver && (
                                 <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
                                     <div className="bg-white text-black p-4 md:p-8 rounded-lg text-center mx-4">
                                         <h2 className="text-2xl md:text-3xl font-bold mb-2 md:mb-4">
-                                            {gameOverReason === "timeout" ? "Time's Up!" : 
+                                            {gameOverReason === "timeout" ? "Time's Up!" :
                                              gameOverReason === "opponent_disconnected" ? "Opponent Disconnected" :
-                                             "Checkmate!"}
+                                             "Game Over!"}
                                         </h2>
                                         <p className="text-lg md:text-xl mb-3 md:mb-4">
                                             {gameOverReason === "opponent_disconnected" ? "You win by default!" :
-                                             winner === playerColor ? "You won! 🎉" : 
+                                             winner === playerColor ? "You won! 🎉" :
+                                             winner === null ? "It's a draw!" :
                                              `${winner?.charAt(0).toUpperCase()}${winner?.slice(1)} wins!`}
                                         </p>
                                         {gameOverReason && gameOverReason !== "checkmate" && (
                                             <p className="text-sm text-gray-600 mb-3">
-                                                {gameOverReason === "timeout" ? "by timeout" : 
+                                                {gameOverReason === "timeout" ? "by timeout" :
                                                  gameOverReason === "opponent_disconnected" ? "opponent left the game" :
                                                  `by ${gameOverReason}`}
                                             </p>
                                         )}
-                                        <button 
-                                            onClick={resetGame} 
+                                        <button
+                                            onClick={resetGame}
                                             className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded"
                                         >
                                             Play Again
@@ -217,13 +273,13 @@ export const Game = () => {
                                 </div>
                             )}
                         </div>
-                        
+
                         {/* Bottom Timer - Your Timer */}
                         {started && whiteTime !== null && blackTime !== null && (
                             <div className="flex justify-center">
                                 <div className={`px-6 py-3 rounded-lg font-mono text-2xl font-bold shadow-lg ${
                                     (playerColor === 'white' && chess.turn() === 'w') || (playerColor === 'black' && chess.turn() === 'b')
-                                        ? 'bg-green-600 text-white' 
+                                        ? 'bg-green-600 text-white'
                                         : 'bg-slate-700 text-white'
                                 }`}>
                                     {playerColor === 'white' ? '⚪' : '⚫'} {playerColor === 'white' ? formatTime(whiteTime) : formatTime(blackTime)}
@@ -232,52 +288,48 @@ export const Game = () => {
                         )}
                     </div>
                 </div>
-                
+
                 <div className="md:col-span-2 bg-slate-900 w-full flex justify-center py-4 md:py-0">
                     <div className="md:pt-8 px-4">
-                        {!started && !searching && (
+                        {reconnecting && (
+                            <div className="text-white text-center">
+                                <div className="mb-4 text-lg">Reconnecting to game...</div>
+                                <div className="animate-pulse text-2xl">♟️</div>
+                                <button
+                                    onClick={resetGame}
+                                    className="mt-6 text-sm text-gray-400 underline hover:text-white"
+                                >
+                                    Cancel & start new game
+                                </button>
+                            </div>
+                        )}
+                        {!started && !searching && !reconnecting && (
                             <div className="space-y-4">
                                 <h2 className="text-white text-xl font-bold mb-4 text-center">Choose Time Control</h2>
-                                
-                                <Button onClick={() => startGame(3)}>
-                                    ⚡ 3 Minutes
-                                </Button>
-                                
-                                <Button onClick={() => startGame(5)}>
-                                    🕐 5 Minutes
-                                </Button>
-                                
-                                <Button onClick={() => startGame(10)}>
-                                    ⏱️ 10 Minutes
-                                </Button>
-                                
-                                <Button onClick={() => startGame(null)}>
-                                    ♾️ No Time Limit
-                                </Button>
+                                <Button onClick={() => startGame(3)}>⚡ 3 Minutes</Button>
+                                <Button onClick={() => startGame(5)}>🕐 5 Minutes</Button>
+                                <Button onClick={() => startGame(10)}>⏱️ 10 Minutes</Button>
+                                <Button onClick={() => startGame(null)}>♾️ No Time Limit</Button>
                             </div>
                         )}
                         {searching && (
                             <div className="text-white text-center">
                                 <div className="mb-4 text-lg">Looking for opponent...</div>
                                 {selectedTimeControl && (
-                                    <div className="mb-2 text-sm text-gray-400">
-                                        {selectedTimeControl} minute game
-                                    </div>
+                                    <div className="mb-2 text-sm text-gray-400">{selectedTimeControl} minute game</div>
                                 )}
                                 <div className="animate-pulse">⏳</div>
                             </div>
                         )}
-                        {started && (
+                        {started && !reconnecting && (
                             <div className="text-white text-center space-y-4">
-                                <div className="text-lg font-bold">
-                                    You are playing as
-                                </div>
+                                <div className="text-lg font-bold">You are playing as</div>
                                 <div className="text-2xl">
                                     {playerColor === "white" ? "⚪ White" : "⚫ Black"}
                                 </div>
                                 {whiteTime !== null && blackTime !== null && (
                                     <div className="mt-4 text-sm text-gray-400">
-                                        {selectedTimeControl} min • Bullet
+                                        {selectedTimeControl} min
                                     </div>
                                 )}
                             </div>

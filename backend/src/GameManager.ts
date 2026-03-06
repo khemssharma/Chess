@@ -1,16 +1,21 @@
 import { WebSocket } from "ws";
-import { INIT_GAME, MOVE, GET_VALID_MOVES } from "./messages";
+import { INIT_GAME, MOVE, GET_VALID_MOVES, RECONNECT } from "./messages";
 import { Game } from "./Game";
+import { redisService } from "./RedisService";
 
 interface PendingPlayer {
     socket: WebSocket;
     timeControl: number | null;
+    playerId: string;
 }
 
 export class GameManager {
     private games: Game[];
-    private pendingUsers: Map<string, PendingPlayer>; // Key is timeControl as string
+    private pendingUsers: Map<string, PendingPlayer>; // key = timeControl string
     private users: WebSocket[];
+
+    // Map playerId → socket for reconnection routing
+    private playerSockets: Map<string, WebSocket> = new Map();
 
     constructor() {
         this.games = [];
@@ -24,113 +29,196 @@ export class GameManager {
     }
 
     removeUser(socket: WebSocket) {
-        this.users = this.users.filter(user => user !== socket);
-        
-        // Remove from pending users if they were waiting
-        for (const [key, pending] of this.pendingUsers.entries()) {
-            if (pending.socket === socket) {
-                this.pendingUsers.delete(key);
-                console.log(`Removed pending user with time control: ${key}`);
+        this.users = this.users.filter(u => u !== socket);
+
+        // Remove from playerSockets index
+        for (const [id, sock] of this.playerSockets.entries()) {
+            if (sock === socket) {
+                this.playerSockets.delete(id);
                 break;
             }
         }
-        
-        // Find and cleanup any game this user was in
-        const game = this.games.find(game => game.player1 === socket || game.player2 === socket);
+
+        // Remove from pending queue
+        for (const [key, pending] of this.pendingUsers.entries()) {
+            if (pending.socket === socket) {
+                this.pendingUsers.delete(key);
+                redisService.deletePendingPlayer(key).catch(console.error);
+                break;
+            }
+        }
+
+        // Notify opponent if in an active game (game state remains in Redis)
+        const game = this.games.find(g => g.player1 === socket || g.player2 === socket);
         if (game) {
             game.cleanup();
-            // Notify the other player
             const otherPlayer = game.player1 === socket ? game.player2 : game.player1;
             otherPlayer.send(JSON.stringify({
-                type: "GAME_OVER",
-                payload: {
-                    winner: game.player1 === socket ? "black" : "white",
-                    reason: "opponent_disconnected"
-                }
+                type: "OPPONENT_DISCONNECTED",
+                payload: { message: "Opponent disconnected. They can rejoin to continue." }
             }));
-            // Remove the game
+            // Keep the game in Redis; remove it from the in-memory list so a
+            // reconnecting player triggers a fresh Game instance.
             this.games = this.games.filter(g => g !== game);
         }
     }
 
     private addHandler(socket: WebSocket) {
-        socket.on("message", (data) => {
-            const message = JSON.parse(data.toString());
+        socket.on("message", async (data) => {
+            let message: any;
+            try {
+                message = JSON.parse(data.toString());
+            } catch {
+                console.error("Invalid JSON from client");
+                return;
+            }
 
+            // ── RECONNECT ──────────────────────────────────────────────────
+            if (message.type === RECONNECT) {
+                await this.handleReconnect(socket, message.payload?.playerId);
+                return;
+            }
+
+            // ── INIT_GAME ──────────────────────────────────────────────────
             if (message.type === INIT_GAME) {
-                // Get time control from message payload
                 let timeControl: number | null = null;
-                if (message.payload && message.payload.timeControl !== undefined && message.payload.timeControl !== null) {
+                if (message.payload?.timeControl !== undefined && message.payload.timeControl !== null) {
                     timeControl = message.payload.timeControl;
                 }
-                
-                console.log("Player requesting game with time control:", timeControl);
-                
-                // Create a key for this time control (convert to string for Map key)
+
                 const timeControlKey = timeControl === null ? "unlimited" : timeControl.toString();
-                
-                console.log("Looking for pending player with key:", timeControlKey);
-                console.log("Current pending users:", Array.from(this.pendingUsers.keys()));
-                
-                // Check if there's a pending user with the same time control
-                const pendingPlayer = this.pendingUsers.get(timeControlKey);
-                
+
+                console.log("Player requesting game, timeControl:", timeControl);
+
+                // Check Redis for a pending player with matching time control
+                let pendingPlayer = this.pendingUsers.get(timeControlKey);
+
+                if (!pendingPlayer) {
+                    // Fall back to Redis (handles server restarts)
+                    const redisPending = await redisService.getPendingPlayer(timeControlKey);
+                    if (redisPending) {
+                        // The pending player's socket might still be in-memory
+                        const pendingSocket = this.playerSockets.get(redisPending.playerId);
+                        if (pendingSocket && pendingSocket !== socket) {
+                            pendingPlayer = { socket: pendingSocket, timeControl, playerId: redisPending.playerId };
+                        } else if (!pendingSocket) {
+                            // Stale Redis entry, clean it up
+                            await redisService.deletePendingPlayer(timeControlKey);
+                        }
+                    }
+                }
+
                 if (pendingPlayer && pendingPlayer.socket !== socket) {
-                    // Match found! Create game with matching time control
-                    console.log("Match found! Creating game with time control:", timeControl);
-                    
-                    // Remove from pending BEFORE creating game
+                    console.log("Match found, creating game with timeControl:", timeControl);
+
                     this.pendingUsers.delete(timeControlKey);
-                    
+                    await redisService.deletePendingPlayer(timeControlKey);
+
                     const game = new Game(pendingPlayer.socket, socket, timeControl);
                     this.games.push(game);
-                    
-                    console.log("Game created successfully");
+
+                    // Index the sockets by their new player IDs
+                    this.playerSockets.set(game.player1Id, pendingPlayer.socket);
+                    this.playerSockets.set(game.player2Id, socket);
                 } else {
-                    // No match found, add this player to pending users
-                    console.log("No match found. Adding to pending users with time control:", timeControl);
-                    
-                    // Make sure to remove this socket from any other pending queues first
+                    console.log("No match, adding to pending queue, timeControl:", timeControl);
+
+                    // Clear any previous pending entry for this socket
                     for (const [key, pending] of this.pendingUsers.entries()) {
                         if (pending.socket === socket) {
                             this.pendingUsers.delete(key);
-                            console.log(`Removed socket from previous queue: ${key}`);
+                            await redisService.deletePendingPlayer(key);
                         }
                     }
-                    
-                    this.pendingUsers.set(timeControlKey, {
-                        socket: socket,
-                        timeControl: timeControl
-                    });
-                    
-                    console.log("Added to pending users. Total pending:", this.pendingUsers.size);
-                    
-                    // Send waiting message
+
+                    const playerId = message.payload?.playerId || this.generateId();
+                    this.pendingUsers.set(timeControlKey, { socket, timeControl, playerId });
+                    this.playerSockets.set(playerId, socket);
+
+                    await redisService.setPendingPlayer(timeControlKey, { playerId, timeControl, timestamp: Date.now() });
+
                     socket.send(JSON.stringify({
                         type: "WAITING",
-                        payload: {
-                            message: "Waiting for opponent with same time control...",
-                            timeControl: timeControl
-                        }
+                        payload: { message: "Waiting for opponent with same time control...", timeControl }
                     }));
                 }
+                return;
             }
 
+            // ── MOVE ───────────────────────────────────────────────────────
             if (message.type === MOVE) {
-                console.log("inside move");
-                const game = this.games.find(game => game.player1 === socket || game.player2 === socket);
+                const game = this.games.find(g => g.player1 === socket || g.player2 === socket);
                 if (game) {
-                    console.log("inside makemove");
                     game.makeMove(socket, message.payload.move);
                 }
+                return;
             }
 
+            // ── GET_VALID_MOVES ────────────────────────────────────────────
             if (message.type === GET_VALID_MOVES) {
-                const game = this.games.find(game => game.player1 === socket || game.player2 === socket);
+                const game = this.games.find(g => g.player1 === socket || g.player2 === socket);
                 if (game) {
                     game.getValidMoves(socket, message.payload.square);
                 }
+                return;
             }
         });
+    }
+
+    private async handleReconnect(socket: WebSocket, playerId: string | undefined) {
+        if (!playerId) {
+            socket.send(JSON.stringify({ type: "ERROR", payload: { message: "No playerId provided for reconnect" } }));
+            return;
+        }
+
+        console.log("Reconnect attempt for playerId:", playerId);
+
+        const persisted = await redisService.getGameByPlayerId(playerId);
+        if (!persisted || persisted.status !== "active") {
+            socket.send(JSON.stringify({ type: "NO_GAME", payload: { message: "No active game found to resume." } }));
+            return;
+        }
+
+        const isPlayer1 = persisted.player1Id === playerId;
+        const otherPlayerId = isPlayer1 ? persisted.player2Id : persisted.player1Id;
+        const otherSocket = this.playerSockets.get(otherPlayerId);
+
+        // Update socket index
+        this.playerSockets.set(playerId, socket);
+
+        if (otherSocket && (otherSocket.readyState === WebSocket.OPEN)) {
+            // Both players are now online — restore the game
+            const player1Socket = isPlayer1 ? socket : otherSocket;
+            const player2Socket = isPlayer1 ? otherSocket : socket;
+
+            // Remove old in-memory game instance if any
+            this.games = this.games.filter(g => g.gameId !== persisted.gameId);
+
+            const game = new Game(player1Socket, player2Socket, persisted.timeControl, {
+                gameId: persisted.gameId,
+                player1Id: persisted.player1Id,
+                player2Id: persisted.player2Id,
+                moveHistory: persisted.moveHistory,
+                moveCount: persisted.moveCount,
+                player1Time: persisted.player1Time,
+                player2Time: persisted.player2Time,
+            });
+
+            this.games.push(game);
+            this.playerSockets.set(game.player1Id, player1Socket);
+            this.playerSockets.set(game.player2Id, player2Socket);
+
+            console.log("Game restored for gameId:", persisted.gameId);
+        } else {
+            // Opponent not yet connected — notify this player to wait
+            socket.send(JSON.stringify({
+                type: "WAITING_FOR_OPPONENT",
+                payload: { message: "Reconnected. Waiting for your opponent to rejoin..." }
+            }));
+        }
+    }
+
+    private generateId(): string {
+        return Math.random().toString(36).slice(2) + Date.now().toString(36);
     }
 }
