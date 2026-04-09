@@ -1,7 +1,9 @@
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 
 export const Landing = () => {
     const navigate = useNavigate();
+    const { user, logout } = useAuth();
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white overflow-hidden">
@@ -19,12 +21,41 @@ export const Landing = () => {
                         <div className="text-4xl">♔</div>
                         <span className="text-2xl font-bold">ChessMaster</span>
                     </div>
-                    <button 
-                        onClick={() => navigate('/game')}
-                        className="bg-white text-purple-900 px-6 py-2 rounded-full font-semibold hover:bg-purple-100 transition-all transform hover:scale-105"
-                    >
-                        Sign In
-                    </button>
+
+                    {user ? (
+                        <div className="flex items-center gap-4">
+                            <button
+                                onClick={() => navigate("/history")}
+                                className="text-gray-300 hover:text-white text-sm transition"
+                            >
+                                My Games
+                            </button>
+                            <span className="text-gray-400 text-sm">
+                                Hi, <span className="text-white font-semibold">{user.username}</span>
+                            </span>
+                            <button
+                                onClick={() => logout()}
+                                className="bg-white/10 border border-white/20 text-white px-4 py-2 rounded-full text-sm font-medium hover:bg-white/20 transition"
+                            >
+                                Sign Out
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={() => navigate("/login")}
+                                className="text-gray-300 hover:text-white text-sm font-medium transition"
+                            >
+                                Sign In
+                            </button>
+                            <button
+                                onClick={() => navigate("/register")}
+                                className="bg-white text-purple-900 px-6 py-2 rounded-full font-semibold hover:bg-purple-100 transition-all transform hover:scale-105"
+                            >
+                                Get Started
+                            </button>
+                        </div>
+                    )}
                 </nav>
             </header>
 
@@ -53,20 +84,42 @@ export const Landing = () => {
 
                     {/* CTA Buttons */}
                     <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-                        <button 
-                            onClick={() => navigate('/game')}
+                        <button
+                            onClick={() => navigate("/game")}
                             className="group relative bg-gradient-to-r from-purple-600 to-pink-600 text-white px-8 py-4 rounded-full font-bold text-lg hover:from-purple-700 hover:to-pink-700 transition-all transform hover:scale-105 shadow-2xl w-full sm:w-auto"
                         >
-                            <span className="relative z-10">Play Now - Free</span>
+                            <span className="relative z-10">
+                                {user ? "Play Now" : "Play Now - Free"}
+                            </span>
                             <div className="absolute inset-0 bg-white opacity-0 group-hover:opacity-20 rounded-full transition-opacity"></div>
                         </button>
-                        <button 
-                            onClick={() => navigate('/game')}
-                            className="bg-white/10 backdrop-blur-sm border border-white/20 text-white px-8 py-4 rounded-full font-bold text-lg hover:bg-white/20 transition-all w-full sm:w-auto"
-                        >
-                            Watch Demo
-                        </button>
+
+                        {user ? (
+                            <button
+                                onClick={() => navigate("/history")}
+                                className="bg-white/10 backdrop-blur-sm border border-white/20 text-white px-8 py-4 rounded-full font-bold text-lg hover:bg-white/20 transition-all w-full sm:w-auto"
+                            >
+                                View My Games
+                            </button>
+                        ) : (
+                            <button
+                                onClick={() => navigate("/register")}
+                                className="bg-white/10 backdrop-blur-sm border border-white/20 text-white px-8 py-4 rounded-full font-bold text-lg hover:bg-white/20 transition-all w-full sm:w-auto"
+                            >
+                                Create Account
+                            </button>
+                        )}
                     </div>
+
+                    {!user && (
+                        <p className="text-gray-500 text-sm mt-4">
+                            No account?{" "}
+                            <button onClick={() => navigate("/game")} className="underline hover:text-gray-300 transition">
+                                Play as guest
+                            </button>{" "}
+                            — games won't be saved to a profile.
+                        </p>
+                    )}
 
                     {/* Stats */}
                     <div className="grid grid-cols-3 gap-8 mt-20 max-w-3xl mx-auto">
@@ -92,33 +145,22 @@ export const Landing = () => {
                     <h2 className="text-3xl md:text-4xl font-bold text-center mb-16">
                         Why Choose ChessMaster?
                     </h2>
-                    
+
                     <div className="grid md:grid-cols-3 gap-8">
-                        {/* Feature 1 */}
                         <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-8 hover:bg-white/10 transition-all">
                             <div className="text-5xl mb-4">⚡</div>
                             <h3 className="text-xl font-bold mb-3">Lightning Fast</h3>
-                            <p className="text-gray-400">
-                                Real-time gameplay with zero lag. Experience smooth moves and instant responses.
-                            </p>
+                            <p className="text-gray-400">Real-time gameplay with zero lag. Experience smooth moves and instant responses.</p>
                         </div>
-
-                        {/* Feature 2 */}
                         <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-8 hover:bg-white/10 transition-all">
-                            <div className="text-5xl mb-4">🎯</div>
-                            <h3 className="text-xl font-bold mb-3">Skill Matching</h3>
-                            <p className="text-gray-400">
-                                Play against opponents of your level. Fair matchmaking ensures exciting games.
-                            </p>
+                            <div className="text-5xl mb-4">📊</div>
+                            <h3 className="text-xl font-bold mb-3">Game History</h3>
+                            <p className="text-gray-400">Every game saved to your profile. Review your wins, losses, and full move history.</p>
                         </div>
-
-                        {/* Feature 3 */}
                         <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-8 hover:bg-white/10 transition-all">
                             <div className="text-5xl mb-4">🏆</div>
                             <h3 className="text-xl font-bold mb-3">Competitive</h3>
-                            <p className="text-gray-400">
-                                Climb the leaderboards, earn achievements, and prove you're the best.
-                            </p>
+                            <p className="text-gray-400">Climb the leaderboards, earn achievements, and prove you're the best.</p>
                         </div>
                     </div>
                 </div>
