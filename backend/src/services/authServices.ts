@@ -27,13 +27,17 @@ class AuthService {
   };
 
   static loginUser = async (email: string, password: string) => {
+    console.log("AuthService.loginUser called with:", { email, password });
     const user = await this.findUserByEmail(email);
+    console.log("User found:", user);
     if (!user) throw new Error("User not found");
     const isMatch = await bcrypt.compare(password, user.password);
+    console.log("Password match:", isMatch);
     if (!isMatch) throw new Error("Invalid password");
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, {
       expiresIn: "24h",
     });
+    console.log("Generated token:", token);
     return token;
   };
 }
