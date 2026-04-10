@@ -54,4 +54,5 @@ server.listen(PORT, () => {
   console.log(`\nServer listening on port ${PORT}`);
   console.log(`  REST API  → http://localhost:${PORT}/api`);
   console.log(`  WebSocket → ws://localhost:${PORT}?token=<jwt>\n`);
+  console.log(process.env.CLIENT_URL ? `  CORS allowed for: ${process.env.CLIENT_URL}\n` : "  No CORS origins configured\n");
 });
