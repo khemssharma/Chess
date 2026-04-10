@@ -22,7 +22,9 @@ class AuthController {
   static login = async (req: Request, res: Response) => {
     try {
       const { email, password } = req.body;
+      console.log("Login request:", { email, password });
       const token = await AuthService.loginUser(email, password);
+      console.log(token);
       res.status(200).json({ token });
     } catch (error) {
       res.status(400).json({ message: "Login failed", error });
