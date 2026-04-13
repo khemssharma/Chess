@@ -33,6 +33,8 @@ export interface PendingPlayerData {
 class RedisService {
   private client: RedisClientType;
   private ready = false;
+  // Queue of callbacks waiting for the client to be ready
+  private readyCallbacks: Array<() => void> = [];
 
   constructor() {
     this.client = createClient({
@@ -41,41 +43,73 @@ class RedisService {
       socket: {
         host: process.env.REDIS_HOST || "localhost",
         port: process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : 6379,
+        // Reconnect automatically on dropped connections
+        reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
       },
     }) as RedisClientType;
 
-    this.client.on("error", (err) => console.log("Redis Client Error", err));
+    this.client.on("error", (err) => console.error("Redis Client Error:", err));
     this.client.on("connect", () => {
       console.log("Redis connected");
       this.ready = true;
+      // Flush any callbacks that were waiting for the connection
+      this.readyCallbacks.forEach((cb) => cb());
+      this.readyCallbacks = [];
     });
     this.client.on("end", () => {
+      console.log("Redis connection closed");
       this.ready = false;
     });
+    this.client.on("reconnecting", () => {
+      console.log("Redis reconnecting...");
+    });
 
-    this.client.connect().catch(console.error);
+    this.client.connect().catch((err) =>
+      console.error("Redis initial connect failed:", err)
+    );
+  }
+
+  /**
+   * Returns a promise that resolves once the Redis client is connected.
+   * If already connected, resolves immediately.
+   * If not connected within 5 s, rejects so callers can handle gracefully.
+   */
+  private waitReady(): Promise<void> {
+    if (this.ready) return Promise.resolve();
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Redis not ready: connection timeout"));
+      }, 5000);
+
+      this.readyCallbacks.push(() => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
   }
 
   // ── Game persistence ───────────────────────────────────────────────────────
 
   async saveGame(game: PersistedGame): Promise<void> {
-    await this.client.set(`game:${game.gameId}`, JSON.stringify(game), {
-      EX: GAME_TTL,
-    });
-    await this.client.set(`player_game:${game.player1Id}`, game.gameId, {
-      EX: GAME_TTL,
-    });
-    await this.client.set(`player_game:${game.player2Id}`, game.gameId, {
-      EX: GAME_TTL,
-    });
+    await this.waitReady();
+    const serialized = JSON.stringify(game);
+    // Use a pipeline so all three writes go in one round-trip
+    const pipeline = this.client.multi();
+    pipeline.set(`game:${game.gameId}`, serialized, { EX: GAME_TTL });
+    pipeline.set(`player_game:${game.player1Id}`, game.gameId, { EX: GAME_TTL });
+    pipeline.set(`player_game:${game.player2Id}`, game.gameId, { EX: GAME_TTL });
+    await pipeline.exec();
   }
 
   async getGame(gameId: string): Promise<PersistedGame | null> {
+    await this.waitReady();
     const data = await this.client.get(`game:${gameId}`);
     return data ? (JSON.parse(data) as PersistedGame) : null;
   }
 
   async getGameByPlayerId(playerId: string): Promise<PersistedGame | null> {
+    await this.waitReady();
     const gameId = await this.client.get(`player_game:${playerId}`);
     if (!gameId) return null;
     return this.getGame(gameId);
@@ -86,9 +120,12 @@ class RedisService {
     player1Id: string,
     player2Id: string
   ): Promise<void> {
-    await this.client.del(`game:${gameId}`);
-    await this.client.del(`player_game:${player1Id}`);
-    await this.client.del(`player_game:${player2Id}`);
+    await this.waitReady();
+    const pipeline = this.client.multi();
+    pipeline.del(`game:${gameId}`);
+    pipeline.del(`player_game:${player1Id}`);
+    pipeline.del(`player_game:${player2Id}`);
+    await pipeline.exec();
   }
 
   // ── Pending players ────────────────────────────────────────────────────────
@@ -97,6 +134,7 @@ class RedisService {
     timeControlKey: string,
     data: PendingPlayerData
   ): Promise<void> {
+    await this.waitReady();
     await this.client.set(
       `pending:${timeControlKey}`,
       JSON.stringify(data),
@@ -107,11 +145,13 @@ class RedisService {
   async getPendingPlayer(
     timeControlKey: string
   ): Promise<PendingPlayerData | null> {
+    await this.waitReady();
     const data = await this.client.get(`pending:${timeControlKey}`);
     return data ? (JSON.parse(data) as PendingPlayerData) : null;
   }
 
   async deletePendingPlayer(timeControlKey: string): Promise<void> {
+    await this.waitReady();
     await this.client.del(`pending:${timeControlKey}`);
   }
 }
