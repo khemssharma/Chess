@@ -5,7 +5,8 @@
   "main": "src/index.ts",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "tsc",
+    "postinstall": "prisma generate",
+    "build": "prisma generate && tsc",
     "start": "node dist/src/index.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
@@ -13,6 +14,7 @@
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
+    "prisma": "^5.22.0",
     "bcryptjs": "^2.4.3",
     "chess.js": "^1.0.0",
     "cors": "^2.8.5",
@@ -31,7 +33,6 @@
     "@types/node": "^20.14.0",
     "@types/uuid": "^10.0.0",
     "@types/ws": "^8.5.12",
-    "prisma": "^5.22.0",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.4.5"
   }
