@@ -1,4 +1,3 @@
-import { User } from "../generated/prisma";
 import { PrismaClient } from '@prisma/client'
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -11,7 +10,7 @@ class AuthService {
     username: string,
     email: string,
     password: string
-  ): Promise<User> => {
+  ) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     return prisma.user.create({
       data: { username, email, password: hashedPassword },
