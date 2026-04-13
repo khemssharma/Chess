@@ -37,7 +37,7 @@ function AppRoutes() {
           <Route path="/history" element={
             <AuthOnly><History /></AuthOnly>
           } />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/game" replace />} />
         </Routes>
       </BrowserRouter>
     </div>
