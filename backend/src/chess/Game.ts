@@ -7,6 +7,9 @@ import {
   VALID_MOVES,
   TIME_UPDATE,
   GAME_STATE,
+  OPPONENT_DISCONNECTED,
+  OPPONENT_RECONNECTED,
+  RECONNECT_TIMEOUT_SECONDS,
 } from "./messages";
 import { redisService, PersistedGame } from "./RedisService";
 import { gameHistoryService } from "../services/gameHistoryService";
@@ -34,6 +37,14 @@ export class Game {
   private player2Time: number | null;
   private lastMoveTime: number;
   private timeUpdateInterval: NodeJS.Timeout | null = null;
+
+  // Disconnect / reconnect timeout
+  private disconnectTimeout: NodeJS.Timeout | null = null;
+  private disconnectCountdownInterval: NodeJS.Timeout | null = null;
+  private disconnectedPlayerId: string | null = null;
+
+  /** Called by GameManager so it can remove this game from its list when it ends by forfeit */
+  public onGameEnd: ((gameId: string) => void) | null = null;
 
   constructor(
     player1: WebSocket,
@@ -359,10 +370,133 @@ export class Game {
     );
   }
 
+  /**
+   * Called by GameManager when one player's WebSocket closes.
+   * Pauses that player's clock, notifies the staying player with a countdown,
+   * and schedules a forfeit if they don't reconnect in time.
+   */
+  opponentDisconnected(disconnectedSocket: WebSocket) {
+    const isPlayer1 = disconnectedSocket === this.player1;
+    this.disconnectedPlayerId = isPlayer1 ? this.player1Id : this.player2Id;
+    const stayingSocket = isPlayer1 ? this.player2 : this.player1;
+    const winnerColor = isPlayer1 ? "black" : "white";
+
+    // Pause the game clock so time doesn't drain while opponent is gone
+    if (this.timeUpdateInterval) {
+      clearInterval(this.timeUpdateInterval);
+      this.timeUpdateInterval = null;
+    }
+
+    let secondsLeft = RECONNECT_TIMEOUT_SECONDS;
+
+    const sendCountdown = () => {
+      if (stayingSocket.readyState === stayingSocket.OPEN) {
+        stayingSocket.send(
+          JSON.stringify({
+            type: OPPONENT_DISCONNECTED,
+            payload: {
+              message: "Opponent disconnected.",
+              secondsLeft,
+            },
+          })
+        );
+      }
+    };
+
+    sendCountdown();
+
+    // Tick every second so the frontend can show a live countdown
+    this.disconnectCountdownInterval = setInterval(() => {
+      secondsLeft--;
+      sendCountdown();
+    }, 1000);
+
+    // Forfeit after the timeout window
+    this.disconnectTimeout = setTimeout(() => {
+      this.clearDisconnectTimers();
+      this.endGameByForfeit(winnerColor);
+    }, RECONNECT_TIMEOUT_SECONDS * 1000);
+  }
+
+  /**
+   * Called by GameManager when the disconnected player successfully reconnects.
+   * Resumes the game clock and notifies the staying player.
+   */
+  opponentReconnected(reconnectedSocket: WebSocket) {
+    this.clearDisconnectTimers();
+    this.disconnectedPlayerId = null;
+
+    // Update the socket reference for the reconnected player
+    const wasPlayer1 = this.player1Id === this.disconnectedPlayerId ||
+      reconnectedSocket !== this.player2;
+    if (wasPlayer1) {
+      this.player1 = reconnectedSocket;
+    } else {
+      this.player2 = reconnectedSocket;
+    }
+
+    // Notify staying player
+    const stayingSocket = wasPlayer1 ? this.player2 : this.player1;
+    if (stayingSocket.readyState === stayingSocket.OPEN) {
+      stayingSocket.send(
+        JSON.stringify({
+          type: OPPONENT_RECONNECTED,
+          payload: { message: "Opponent reconnected. Game resumes!" },
+        })
+      );
+    }
+
+    // Resume clock
+    if (this.timeControl !== null) {
+      this.lastMoveTime = Date.now();
+      this.startTimeTracking();
+    }
+  }
+
+  private clearDisconnectTimers() {
+    if (this.disconnectTimeout) {
+      clearTimeout(this.disconnectTimeout);
+      this.disconnectTimeout = null;
+    }
+    if (this.disconnectCountdownInterval) {
+      clearInterval(this.disconnectCountdownInterval);
+      this.disconnectCountdownInterval = null;
+    }
+  }
+
+  private endGameByForfeit(winnerColor: string) {
+    if (this.timeUpdateInterval) {
+      clearInterval(this.timeUpdateInterval);
+      this.timeUpdateInterval = null;
+    }
+
+    const gameOverMessage = JSON.stringify({
+      type: GAME_OVER,
+      payload: { winner: winnerColor, reason: "opponent_left" },
+    });
+
+    // Only send to the staying (open) socket — the disconnected one is gone
+    [this.player1, this.player2].forEach((s) => {
+      if (s.readyState === s.OPEN) {
+        s.send(gameOverMessage);
+      }
+    });
+
+    this.persistToRedis("over", winnerColor, "opponent_left");
+    this.persistGameResult(winnerColor, "opponent_left");
+    redisService
+      .deleteGame(this.gameId, this.player1Id, this.player2Id)
+      .catch(console.error);
+
+    // Notify GameManager to remove this game from its active list
+    if (this.onGameEnd) this.onGameEnd(this.gameId);
+  }
+
   cleanup() {
     if (this.timeUpdateInterval) {
       clearInterval(this.timeUpdateInterval);
       this.timeUpdateInterval = null;
     }
+    this.clearDisconnectTimers();
   }
 }

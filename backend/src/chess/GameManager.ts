@@ -53,23 +53,13 @@ export class GameManager {
       }
     }
 
-    // Notify opponent if in active game (state stays in Redis for reconnect)
+    // Notify opponent if in active game — start reconnect countdown instead of destroying game
     const game = this.games.find(
       (g) => g.player1 === socket || g.player2 === socket
     );
     if (game) {
-      game.cleanup();
-      const otherPlayer =
-        game.player1 === socket ? game.player2 : game.player1;
-      otherPlayer.send(
-        JSON.stringify({
-          type: "OPPONENT_DISCONNECTED",
-          payload: {
-            message: "Opponent disconnected. They can rejoin to continue.",
-          },
-        })
-      );
-      this.games = this.games.filter((g) => g !== game);
+      // Don't remove the game yet — keep it alive for potential reconnection
+      game.opponentDisconnected(socket);
     }
   }
 
@@ -140,6 +130,9 @@ export class GameManager {
             dbUserId,
             timeControl
           );
+          game.onGameEnd = (gameId) => {
+            this.games = this.games.filter((g) => g.gameId !== gameId);
+          };
           this.games.push(game);
 
           this.playerSockets.set(game.player1Id, pendingPlayer.socket);
@@ -244,6 +237,36 @@ export class GameManager {
 
     this.playerSockets.set(playerId, socket);
 
+    // Check if the game is still alive in memory (opponent is still connected)
+    const liveGame = this.games.find((g) => g.gameId === persisted.gameId);
+
+    if (liveGame && otherSocket && otherSocket.readyState === WebSocket.OPEN) {
+      // Update the socket on the live game object
+      if (isPlayer1) {
+        liveGame.player1 = socket;
+      } else {
+        liveGame.player2 = socket;
+      }
+      this.playerSockets.set(playerId, socket);
+
+      // Resume the game and notify both players
+      liveGame.opponentReconnected(socket);
+
+      // Resend full game state to the reconnecting player
+      const basePayload = {
+        fen: liveGame.board.fen(),
+        moveCount: liveGame["moveCount"],
+        whiteTime: liveGame["player1Time"] !== null ? Math.max(0, liveGame["player1Time"]) : null,
+        blackTime: liveGame["player2Time"] !== null ? Math.max(0, liveGame["player2Time"]) : null,
+        timeControl: persisted.timeControl,
+        yourColor: isPlayer1 ? "white" : "black",
+      };
+      socket.send(JSON.stringify({ type: "game_state", payload: basePayload }));
+
+      console.log("Player reconnected to live game:", persisted.gameId);
+      return;
+    }
+
     if (otherSocket && otherSocket.readyState === WebSocket.OPEN) {
       const player1Socket = isPlayer1 ? socket : otherSocket;
       const player2Socket = isPlayer1 ? otherSocket : socket;
@@ -266,6 +289,9 @@ export class GameManager {
           player2Time: persisted.player2Time,
         }
       );
+      game.onGameEnd = (gameId) => {
+        this.games = this.games.filter((g) => g.gameId !== gameId);
+      };
 
       this.games.push(game);
       this.playerSockets.set(game.player1Id, player1Socket);
