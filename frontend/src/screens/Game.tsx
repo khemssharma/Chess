@@ -41,6 +41,8 @@ export const Game = () => {
     const [reconnecting, setReconnecting] = useState(false);
     const [whiteTime, setWhiteTime] = useState<number | null>(null);
     const [blackTime, setBlackTime] = useState<number | null>(null);
+    const [opponentDisconnected, setOpponentDisconnected] = useState(false);
+    const [disconnectSecondsLeft, setDisconnectSecondsLeft] = useState<number | null>(null);
 
     // Attempt reconnect on socket connect if we have a stored session
     useEffect(() => {
@@ -110,6 +112,8 @@ export const Game = () => {
                     setGameOver(true);
                     setWinner(message.payload.winner);
                     setGameOverReason(message.payload.reason || "checkmate");
+                    setOpponentDisconnected(false);
+                    setDisconnectSecondsLeft(null);
                     break;
 
                 case VALID_MOVES:
@@ -138,6 +142,13 @@ export const Game = () => {
                     break;
 
                 case "OPPONENT_DISCONNECTED":
+                    setOpponentDisconnected(true);
+                    setDisconnectSecondsLeft(message.payload?.secondsLeft ?? null);
+                    break;
+
+                case "OPPONENT_RECONNECTED":
+                    setOpponentDisconnected(false);
+                    setDisconnectSecondsLeft(null);
                     break;
             }
         };
@@ -173,6 +184,8 @@ export const Game = () => {
         setWhiteTime(null);
         setBlackTime(null);
         setReconnecting(false);
+        setOpponentDisconnected(false);
+        setDisconnectSecondsLeft(null);
     };
 
     const startGame = (timeControl: number | null) => {
@@ -248,6 +261,20 @@ export const Game = () => {
                                 </div>
                             )}
 
+                            {/* Opponent disconnected banner */}
+                            {opponentDisconnected && !gameOver && (
+                                <div className="flex justify-center">
+                                    <div className="w-full px-4 py-3 rounded-lg bg-yellow-600 text-white text-center shadow-lg">
+                                        <p className="font-bold text-sm">⚠️ Opponent disconnected</p>
+                                        {disconnectSecondsLeft !== null && (
+                                            <p className="text-xs mt-1">
+                                                They have <span className="font-mono font-bold">{disconnectSecondsLeft}s</span> to reconnect or you win!
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Board */}
                             <div className="relative">
                                 <ChessBoard
@@ -266,7 +293,7 @@ export const Game = () => {
                                     <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
                                         <div className="bg-white text-black p-4 md:p-8 rounded-lg text-center mx-4">
                                             <h2 className="text-2xl md:text-3xl font-bold mb-2 md:mb-4">
-                                                {gameOverReason === "timeout" ? "Time's Up!" : "Game Over!"}
+                                                {gameOverReason === "timeout" ? "Time's Up!" : gameOverReason === "opponent_left" ? "Opponent Left" : "Game Over!"}
                                             </h2>
                                             <p className="text-lg md:text-xl mb-3 md:mb-4">
                                                 {winner === playerColor
@@ -277,7 +304,9 @@ export const Game = () => {
                                             </p>
                                             {gameOverReason && gameOverReason !== "checkmate" && (
                                                 <p className="text-sm text-gray-600 mb-3">
-                                                    by {gameOverReason}
+                                                    {gameOverReason === "opponent_left"
+                                                        ? "Your opponent failed to reconnect in time."
+                                                        : `by ${gameOverReason}`}
                                                 </p>
                                             )}
                                             <div className="flex gap-3 justify-center flex-wrap">
