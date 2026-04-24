@@ -14,9 +14,13 @@ export const VALID_MOVES = "valid_moves";
 export const TIME_UPDATE = "time_update";
 export const RECONNECT = "reconnect";
 export const GAME_STATE = "game_state";
+export const PLAY_VS_COMPUTER = "play_vs_computer";
 
 const PLAYER_ID_KEY = "chess_player_id";
 const GAME_ID_KEY = "chess_game_id";
+
+type Difficulty = "easy" | "medium" | "hard" | "expert";
+type GameMode = "online" | "computer" | null;
 
 interface InitGamePayload {
     type: string;
@@ -43,6 +47,13 @@ export const Game = () => {
     const [blackTime, setBlackTime] = useState<number | null>(null);
     const [opponentDisconnected, setOpponentDisconnected] = useState(false);
     const [disconnectSecondsLeft, setDisconnectSecondsLeft] = useState<number | null>(null);
+
+    // Computer game state
+    const [gameMode, setGameMode] = useState<GameMode>(null);
+    const [selectedDifficulty, setSelectedDifficulty] = useState<Difficulty>("medium");
+    const [selectedColor, setSelectedColor] = useState<"white" | "black" | "random">("white");
+    const [vsComputer, setVsComputer] = useState(false);
+    const [difficulty, setDifficulty] = useState<Difficulty>("medium");
 
     // Attempt reconnect on socket connect if we have a stored session
     useEffect(() => {
@@ -72,6 +83,8 @@ export const Game = () => {
                     setSearching(false);
                     setReconnecting(false);
                     setPlayerColor(message.payload.color);
+                    setVsComputer(!!message.payload.vsComputer);
+                    if (message.payload.difficulty) setDifficulty(message.payload.difficulty);
 
                     if (message.payload.timeControl) {
                         const ms = message.payload.timeControl * 60 * 1000;
@@ -186,6 +199,8 @@ export const Game = () => {
         setReconnecting(false);
         setOpponentDisconnected(false);
         setDisconnectSecondsLeft(null);
+        setVsComputer(false);
+        setGameMode(null);
     };
 
     const startGame = (timeControl: number | null) => {
@@ -194,6 +209,21 @@ export const Game = () => {
         const payload: InitGamePayload = { type: INIT_GAME };
         if (timeControl !== null) payload.payload = { timeControl };
         socket?.send(JSON.stringify(payload));
+    };
+
+    const startComputerGame = (timeControl: number | null) => {
+        const color = selectedColor === "random"
+            ? (Math.random() < 0.5 ? "white" : "black")
+            : selectedColor;
+        setSelectedTimeControl(timeControl);
+        socket?.send(JSON.stringify({
+            type: PLAY_VS_COMPUTER,
+            payload: {
+                difficulty: selectedDifficulty,
+                color,
+                timeControl,
+            },
+        }));
     };
 
     if (!socket) return (
@@ -300,6 +330,8 @@ export const Game = () => {
                                                     ? "You won! 🎉"
                                                     : winner === null
                                                     ? "It's a draw!"
+                                                    : vsComputer
+                                                    ? "Computer wins! 🤖"
                                                     : `${winner?.charAt(0).toUpperCase()}${winner?.slice(1)} wins!`}
                                             </p>
                                             {gameOverReason && gameOverReason !== "checkmate" && (
@@ -373,14 +405,109 @@ export const Game = () => {
 
                             {!started && !searching && !reconnecting && (
                                 <div className="space-y-4">
-                                    <h2 className="text-white text-xl font-bold mb-4 text-center">Choose Time Control</h2>
-                                    <Button onClick={() => startGame(3)}>⚡ 3 Minutes</Button>
-                                    <Button onClick={() => startGame(5)}>🕐 5 Minutes</Button>
-                                    <Button onClick={() => startGame(10)}>⏱️ 10 Minutes</Button>
-                                    <Button onClick={() => startGame(null)}>♾️ No Time Limit</Button>
+                                    {/* Mode selector */}
+                                    {gameMode === null && (
+                                        <>
+                                            <h2 className="text-white text-xl font-bold mb-4 text-center">Choose Game Mode</h2>
+                                            <button
+                                                onClick={() => setGameMode("online")}
+                                                className="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white py-4 rounded-xl font-bold text-base hover:from-purple-700 hover:to-pink-700 transition-all flex items-center justify-center gap-2"
+                                            >
+                                                🌐 Play Online
+                                            </button>
+                                            <button
+                                                onClick={() => setGameMode("computer")}
+                                                className="w-full bg-gradient-to-r from-slate-600 to-slate-700 text-white py-4 rounded-xl font-bold text-base border border-slate-500 hover:from-slate-500 hover:to-slate-600 transition-all flex items-center justify-center gap-2"
+                                            >
+                                                🤖 Play vs Computer
+                                            </button>
+                                        </>
+                                    )}
 
-                                    {!user && (
-                                        <div className="mt-6 pt-4 border-t border-slate-700 text-center">
+                                    {/* Online: time control */}
+                                    {gameMode === "online" && (
+                                        <>
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <button onClick={() => setGameMode(null)} className="text-gray-400 hover:text-white text-sm">← Back</button>
+                                                <h2 className="text-white text-lg font-bold">Choose Time Control</h2>
+                                            </div>
+                                            <Button onClick={() => startGame(3)}>⚡ 3 Minutes</Button>
+                                            <Button onClick={() => startGame(5)}>🕐 5 Minutes</Button>
+                                            <Button onClick={() => startGame(10)}>⏱️ 10 Minutes</Button>
+                                            <Button onClick={() => startGame(null)}>♾️ No Time Limit</Button>
+                                        </>
+                                    )}
+
+                                    {/* Computer: settings */}
+                                    {gameMode === "computer" && (
+                                        <>
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <button onClick={() => setGameMode(null)} className="text-gray-400 hover:text-white text-sm">← Back</button>
+                                                <h2 className="text-white text-lg font-bold">Play vs Computer</h2>
+                                            </div>
+
+                                            {/* Difficulty */}
+                                            <div>
+                                                <p className="text-gray-400 text-xs mb-2 uppercase tracking-wider">Difficulty</p>
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    {(["easy", "medium", "hard", "expert"] as Difficulty[]).map((d) => (
+                                                        <button
+                                                            key={d}
+                                                            onClick={() => setSelectedDifficulty(d)}
+                                                            className={`py-2 px-3 rounded-lg text-sm font-semibold capitalize transition-all border ${
+                                                                selectedDifficulty === d
+                                                                    ? "bg-purple-600 border-purple-400 text-white"
+                                                                    : "bg-slate-700 border-slate-600 text-gray-300 hover:bg-slate-600"
+                                                            }`}
+                                                        >
+                                                            {d === "easy" && "🟢 "}
+                                                            {d === "medium" && "🟡 "}
+                                                            {d === "hard" && "🔴 "}
+                                                            {d === "expert" && "💀 "}
+                                                            {d}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            {/* Color picker */}
+                                            <div>
+                                                <p className="text-gray-400 text-xs mb-2 uppercase tracking-wider">Play as</p>
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    {(["white", "black", "random"] as const).map((c) => (
+                                                        <button
+                                                            key={c}
+                                                            onClick={() => setSelectedColor(c)}
+                                                            className={`py-2 px-2 rounded-lg text-sm font-semibold capitalize transition-all border ${
+                                                                selectedColor === c
+                                                                    ? "bg-purple-600 border-purple-400 text-white"
+                                                                    : "bg-slate-700 border-slate-600 text-gray-300 hover:bg-slate-600"
+                                                            }`}
+                                                        >
+                                                            {c === "white" && "⚪"}
+                                                            {c === "black" && "⚫"}
+                                                            {c === "random" && "🎲"}
+                                                            <div className="text-xs mt-0.5">{c}</div>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            {/* Time control */}
+                                            <div>
+                                                <p className="text-gray-400 text-xs mb-2 uppercase tracking-wider">Time Control</p>
+                                                <div className="space-y-2">
+                                                    <Button onClick={() => startComputerGame(3)}>⚡ 3 Minutes</Button>
+                                                    <Button onClick={() => startComputerGame(5)}>🕐 5 Minutes</Button>
+                                                    <Button onClick={() => startComputerGame(10)}>⏱️ 10 Minutes</Button>
+                                                    <Button onClick={() => startComputerGame(null)}>♾️ No Time Limit</Button>
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
+
+                                    {!user && gameMode !== null && (
+                                        <div className="mt-4 pt-4 border-t border-slate-700 text-center">
                                             <p className="text-gray-500 text-xs mb-2">Games won't be saved</p>
                                             <button
                                                 onClick={() => navigate("/login")}
@@ -409,12 +536,27 @@ export const Game = () => {
                                     <div className="text-2xl">
                                         {playerColor === "white" ? "⚪ White" : "⚫ Black"}
                                     </div>
+                                    {vsComputer && (
+                                        <div className="bg-slate-800 rounded-xl p-3 border border-slate-600">
+                                            <div className="text-sm text-gray-400 mb-1">Opponent</div>
+                                            <div className="text-base font-bold">
+                                                🤖 Stockfish
+                                            </div>
+                                            <div className="text-xs text-gray-400 capitalize mt-1">
+                                                {difficulty === "easy" && "🟢 "}
+                                                {difficulty === "medium" && "🟡 "}
+                                                {difficulty === "hard" && "🔴 "}
+                                                {difficulty === "expert" && "💀 "}
+                                                {difficulty} difficulty
+                                            </div>
+                                        </div>
+                                    )}
                                     {whiteTime !== null && (
                                         <div className="text-sm text-gray-400">
                                             {selectedTimeControl} min game
                                         </div>
                                     )}
-                                    {user && (
+                                    {user && !vsComputer && (
                                         <div className="mt-4 pt-4 border-t border-slate-700">
                                             <p className="text-xs text-green-400">
                                                 ✓ Game will be saved to your profile

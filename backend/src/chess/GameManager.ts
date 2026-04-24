@@ -1,6 +1,7 @@
 import { WebSocket } from "ws";
-import { INIT_GAME, MOVE, GET_VALID_MOVES, RECONNECT } from "./messages";
+import { INIT_GAME, MOVE, GET_VALID_MOVES, RECONNECT, PLAY_VS_COMPUTER } from "./messages";
 import { Game } from "./Game";
+import { StockfishGame, Difficulty } from "./StockfishGame";
 import { redisService } from "./RedisService";
 
 interface PendingPlayer {
@@ -12,6 +13,7 @@ interface PendingPlayer {
 
 export class GameManager {
   private games: Game[];
+  private computerGames: StockfishGame[];
   private pendingUsers: Map<string, PendingPlayer>; // key = timeControl string
   private users: WebSocket[];
 
@@ -20,6 +22,7 @@ export class GameManager {
 
   constructor() {
     this.games = [];
+    this.computerGames = [];
     this.pendingUsers = new Map();
     this.users = [];
   }
@@ -51,6 +54,13 @@ export class GameManager {
         redisService.deletePendingPlayer(key).catch(console.error);
         break;
       }
+    }
+
+    // Clean up computer game if this player had one
+    const computerGame = this.computerGames.find((g) => g.player === socket);
+    if (computerGame) {
+      computerGame.cleanup();
+      this.computerGames = this.computerGames.filter((g) => g !== computerGame);
     }
 
     // Notify opponent if in active game — start reconnect countdown instead of destroying game
@@ -177,6 +187,30 @@ export class GameManager {
         return;
       }
 
+      // ── PLAY_VS_COMPUTER ─────────────────────────────────────────────────
+      if (message.type === PLAY_VS_COMPUTER) {
+        const difficulty: Difficulty = message.payload?.difficulty || "medium";
+        const playerColor: "white" | "black" = message.payload?.color || "white";
+        const timeControl: number | null = message.payload?.timeControl ?? null;
+
+        // Clean up any existing computer game for this socket
+        const existingCG = this.computerGames.find((g) => g.player === socket);
+        if (existingCG) {
+          existingCG.cleanup();
+          this.computerGames = this.computerGames.filter((g) => g !== existingCG);
+        }
+
+        console.log(`Starting computer game: difficulty=${difficulty}, color=${playerColor}, timeControl=${timeControl}`);
+
+        const cg = new StockfishGame(socket, playerColor, difficulty, timeControl, dbUserId);
+        cg.onGameEnd = (gameId) => {
+          this.computerGames = this.computerGames.filter((g) => g.gameId !== gameId);
+        };
+        this.computerGames.push(cg);
+        this.playerSockets.set(cg.playerId, socket);
+        return;
+      }
+
       // ── MOVE ─────────────────────────────────────────────────────────────
       if (message.type === MOVE) {
         const game = this.games.find(
@@ -184,6 +218,11 @@ export class GameManager {
         );
         if (game) {
           game.makeMove(socket, message.payload.move);
+          return;
+        }
+        const cg = this.computerGames.find((g) => g.player === socket);
+        if (cg) {
+          cg.makeMove(socket, message.payload.move);
         }
         return;
       }
@@ -195,6 +234,11 @@ export class GameManager {
         );
         if (game) {
           game.getValidMoves(socket, message.payload.square);
+          return;
+        }
+        const cg = this.computerGames.find((g) => g.player === socket);
+        if (cg) {
+          cg.getValidMoves(socket, message.payload.square);
         }
         return;
       }

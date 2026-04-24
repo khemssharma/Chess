@@ -5,7 +5,7 @@ services:
     region: oregon
     branch: main
     workingDirectory: backend
-    buildCommand: npm install && npm run build
+    buildCommand: apt-get update && apt-get install -y stockfish && npm install && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV

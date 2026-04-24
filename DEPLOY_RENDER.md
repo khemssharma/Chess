@@ -1,31 +1,81 @@
-Render deployment steps
+# Deploying to Render
 
-1) Push your repo to Github (or connect your repo to Render). This repo should contain both `backend` and `frontend` directories. The attached `render.yaml` defines both services.
+## Overview
+This project deploys as two Render services:
+- **chess-backend** — Node.js Web Service (WebSocket + REST API)
+- **chess-frontend** — Static Site (React/Vite)
 
-2) Backend (Web Service)
-- Render should detect the `backend` working directory using `render.yaml`.
-- Build command: `npm install && npm run build`
-- Start command: `npm start`
-- Ensure the `PORT` environment variable is used — the backend already falls back to `process.env.PORT`.
+The `render.yaml` at the repo root defines both. Render will auto-detect it when you connect your GitHub repo.
 
-3) Frontend (Static Site)
-- Render should detect the `frontend` working directory using `render.yaml`.
-- Build command: `npm install && npm run build`
-- Publish directory: `dist`
-- Set environment variable: `VITE_WS_URL` to `wss://<your-backend-service>.onrender.com` (replace with the actual backend URL provided by Render). If your backend serves non-TLS websocket, use `ws://`.
+---
 
-4) Manual deploy steps (alternative):
-- Create a new Web Service in Render and configure it to use the `backend` folder. Set the build & start commands above.
-- Create a new Static Site in Render and configure it to use the `frontend` folder. After building, set `VITE_WS_URL` env var to the backend URL.
+## 1. Push your repo to GitHub
+Make sure your repo contains both `backend/` and `frontend/` directories, plus `render.yaml`.
 
-5) Notes & tips:
-- The backend uses TypeScript and compiles to `dist` before starting; `start` runs the compiled code in `dist`.
-- If your frontend needs to use secure websockets (`wss`), make sure the backend is configured to use TLS or is behind a TLS-terminating proxy.
-- Locally, the frontend defaults to `ws://localhost:8080` if the `VITE_WS_URL` env var isn't set.
+---
 
-6) Troubleshooting:
-- If the websocket doesn't connect, ensure you used `wss://` for secure connections, and confirm your Render backend service is started successfully.
-- Tail logs on Render (dashboard) if connections are failing.
-- If you change the server path or port, update `VITE_WS_URL` accordingly.
+## 2. Connect to Render
+1. Go to [render.com](https://render.com) → **New** → **Blueprint**
+2. Connect your GitHub repo
+3. Render will read `render.yaml` and create both services automatically
 
-That's it — once you deploy the backend and configure the frontend env var to point to your backend, the app will connect through Render-hosted endpoints.
+---
+
+## 3. Backend environment variables
+Set these in the Render dashboard under **chess-backend → Environment**:
+
+| Key | Value |
+|-----|-------|
+| `DATABASE_URL` | Your PostgreSQL connection string |
+| `REDIS_URL` | Your Redis connection string |
+| `JWT_SECRET` | A long random secret string |
+| `NODE_ENV` | `production` |
+
+Render offers managed **PostgreSQL** and **Redis** add-ons — create them from the dashboard and copy the connection URLs.
+
+---
+
+## 4. Frontend environment variable
+Set this under **chess-frontend → Environment**:
+
+| Key | Value |
+|-----|-------|
+| `VITE_WS_URL` | `wss://chess-backend.onrender.com` |
+
+Replace `chess-backend` with the actual subdomain Render assigns to your backend service.
+
+---
+
+## 5. Stockfish on Render
+Stockfish is installed automatically during the backend build step:
+
+```
+apt-get update && apt-get install -y stockfish && npm install && npm run build
+```
+
+This is already set in `render.yaml` — no extra action needed. Render's Node.js web service environment runs on Debian/Ubuntu, so `apt-get` works out of the box.
+
+If the build ever fails with a Stockfish error, you can verify availability by checking the build logs for `stockfish` installation output.
+
+---
+
+## 6. Deploy order
+Deploy the **backend first**, wait for it to be live, then deploy the **frontend** — so you have the real backend URL to set in `VITE_WS_URL`.
+
+---
+
+## 7. Troubleshooting
+
+**WebSocket won't connect**
+- Confirm `VITE_WS_URL` uses `wss://` (not `ws://`) — Render always terminates TLS.
+- Make sure the backend URL matches exactly what Render shows (e.g. `chess-backend.onrender.com`).
+
+**Stockfish not working / fallback to random moves**
+- Check the backend build logs for `apt-get install -y stockfish` — it should show a successful install.
+- Render's free tier may time out during heavy builds; retry the deploy if needed.
+
+**Database errors on startup**
+- Run `npm run db:migrate` locally against your production `DATABASE_URL`, or trigger it in a Render shell (dashboard → shell tab).
+
+**Cold start delays**
+- Free-tier Render services spin down after inactivity. The first WebSocket connection after sleep will take ~30 seconds. Upgrade to a paid instance to avoid this.
