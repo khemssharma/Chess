@@ -153,14 +153,14 @@ export const Landing = () => {
                             <p className="text-gray-400">Real-time gameplay with zero lag. Experience smooth moves and instant responses.</p>
                         </div>
                         <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-8 hover:bg-white/10 transition-all">
+                            <div className="text-5xl mb-4">🤖</div>
+                            <h3 className="text-xl font-bold mb-3">Play vs Computer</h3>
+                            <p className="text-gray-400">Challenge Stockfish at four difficulty levels — from beginner-friendly to grandmaster strength.</p>
+                        </div>
+                        <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-8 hover:bg-white/10 transition-all">
                             <div className="text-5xl mb-4">📊</div>
                             <h3 className="text-xl font-bold mb-3">Game History</h3>
                             <p className="text-gray-400">Every game saved to your profile. Review your wins, losses, and full move history.</p>
-                        </div>
-                        <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-8 hover:bg-white/10 transition-all">
-                            <div className="text-5xl mb-4">🏆</div>
-                            <h3 className="text-xl font-bold mb-3">Competitive</h3>
-                            <p className="text-gray-400">Climb the leaderboards, earn achievements, and prove you're the best.</p>
                         </div>
                     </div>
                 </div>

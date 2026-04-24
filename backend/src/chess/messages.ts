@@ -8,6 +8,7 @@ export const RECONNECT = "reconnect";
 export const GAME_STATE = "game_state";
 export const OPPONENT_DISCONNECTED = "OPPONENT_DISCONNECTED";
 export const OPPONENT_RECONNECTED = "OPPONENT_RECONNECTED";
+export const PLAY_VS_COMPUTER = "play_vs_computer";
 
 /** Seconds to wait for a disconnected player before forfeiting them */
 export const RECONNECT_TIMEOUT_SECONDS = 60;
