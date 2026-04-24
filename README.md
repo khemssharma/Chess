@@ -3,9 +3,10 @@
 1. Game is Playable and guaranteed to have a result.
 2. Games are being saved in redis (temporarily) and PostgreSQL (permanently) and a dozen players can play their own 2 player game.
 ## Screenshot
-![Screenshot](./screenshots/game.png)
-![Screenshot](./screenshots/game_history.png)
-![Screenshot](./screenshots/timeout.png)
+![Game](./screenshots/game.png)
+![History](./screenshots/game_history.png)
+![Disconnections](./screenshots/timeout.png)
+![Play-Stockfish](./screenshots/play_stockfish.png)
 
 ## Contribution
 (We welcome contributions! Please follow these steps to contribute to this project:)
