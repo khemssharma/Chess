@@ -36,6 +36,10 @@ model Game {
   // Time control in minutes (null = unlimited)
   timeControl Int?
 
+  // Computer game metadata
+  isVsComputer       Boolean @default(false)
+  computerDifficulty String? // "easy" | "medium" | "hard" | "expert"
+
   // Game outcome
   status  String   @default("active") // "active" | "over"
   winner  String?  // "white" | "black" | null (draw)

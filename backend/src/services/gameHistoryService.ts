@@ -12,6 +12,8 @@ interface SaveGameResultParams {
   timeControl: number | null;
   winner: string | null;
   reason: string;
+  isVsComputer?: boolean;
+  computerDifficulty?: string;
 }
 
 class GameHistoryService {
@@ -29,6 +31,8 @@ class GameHistoryService {
         moveHistory: params.moveHistory as any,
         moveCount: params.moveCount,
         timeControl: params.timeControl,
+        isVsComputer: params.isVsComputer ?? false,
+        computerDifficulty: params.computerDifficulty ?? null,
         status: "over",
         winner: params.winner,
         reason: params.reason,
@@ -37,12 +41,12 @@ class GameHistoryService {
     });
 
     console.log(
-      `Game ${params.gameId} saved to DB — winner: ${params.winner}, reason: ${params.reason}`
+      `Game ${params.gameId} saved to DB — winner: ${params.winner}, reason: ${params.reason}, vsComputer: ${params.isVsComputer ?? false}`
     );
   }
 
   /**
-   * Fetch all games for a given user (as white or black).
+   * Fetch all games for a given user (as white or black). List view only.
    */
   async getGamesByUserId(userId: number) {
     return prisma.game.findMany({
@@ -60,6 +64,8 @@ class GameHistoryService {
         status: true,
         winner: true,
         reason: true,
+        isVsComputer: true,
+        computerDifficulty: true,
         startedAt: true,
         finishedAt: true,
       },
@@ -68,7 +74,7 @@ class GameHistoryService {
   }
 
   /**
-   * Fetch a single game by ID (with full move history).
+   * Fetch a single game by ID with full move history for replay.
    */
   async getGameById(gameId: string) {
     return prisma.game.findUnique({
