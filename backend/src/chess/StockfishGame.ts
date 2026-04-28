@@ -8,6 +8,7 @@ import {
   VALID_MOVES,
   TIME_UPDATE,
 } from "./messages";
+import { gameHistoryService } from "../services/gameHistoryService";
 import { v4 as uuidv4 } from "uuid";
 
 export type Difficulty = "easy" | "medium" | "hard" | "expert";
@@ -26,7 +27,6 @@ const DIFFICULTY_DEPTH: Record<Difficulty, number> = {
   expert: 20,
 };
 
-// Delay (ms) to make AI feel more natural at lower difficulties
 const DIFFICULTY_DELAY: Record<Difficulty, number> = {
   easy: 1000,
   medium: 600,
@@ -43,6 +43,7 @@ export class StockfishGame {
   private difficulty: Difficulty;
   private stockfish: ChildProcessWithoutNullStreams | null = null;
   private moveCount = 0;
+  private dbUserId: number | null;
 
   // Time control
   private timeControl: number | null;
@@ -66,6 +67,7 @@ export class StockfishGame {
     this.playerId = uuidv4();
     this.playerColor = playerColor;
     this.difficulty = difficulty;
+    this.dbUserId = dbUserId;
 
     this.timeControl = timeControlMinutes !== null ? timeControlMinutes * 60 * 1000 : null;
     this.playerTime = this.timeControl;
@@ -92,14 +94,13 @@ export class StockfishGame {
       this.startTimeTracking();
     }
 
-    // If AI plays white, make first move immediately
+    // If AI plays white, make first move
     if (playerColor === "black") {
       setTimeout(() => this.requestStockfishMove(), 500);
     }
   }
 
   private initStockfish() {
-    // Try multiple Stockfish binary locations
     const candidates = [
       "stockfish",
       "/usr/games/stockfish",
@@ -110,18 +111,15 @@ export class StockfishGame {
     for (const bin of candidates) {
       try {
         this.stockfish = spawn(bin, [], { stdio: ["pipe", "pipe", "pipe"] });
-        this.stockfish.on("error", () => {
-          this.stockfish = null;
-        });
+        this.stockfish.on("error", () => { this.stockfish = null; });
         this.stockfish.stdout.setEncoding("utf8");
 
-        // Configure UCI
         this.stockfish.stdin.write("uci\n");
         this.stockfish.stdin.write(`setoption name UCI_LimitStrength value true\n`);
         this.stockfish.stdin.write(`setoption name UCI_Elo value ${DIFFICULTY_ELO[this.difficulty]}\n`);
         this.stockfish.stdin.write("isready\n");
 
-        console.log(`Stockfish started with binary: ${bin}`);
+        console.log(`Stockfish started: ${bin}`);
         break;
       } catch {
         this.stockfish = null;
@@ -185,7 +183,6 @@ export class StockfishGame {
     try {
       this.board.move(move);
     } catch {
-      // Engine returned an invalid move in some edge case — skip
       return;
     }
 
@@ -195,7 +192,6 @@ export class StockfishGame {
 
     this.moveCount++;
 
-    // Notify player of AI's move
     this.player.send(JSON.stringify({ type: MOVE, payload: move }));
 
     if (this.timeControl !== null) {
@@ -210,7 +206,6 @@ export class StockfishGame {
   makeMove(socket: WebSocket, move: { from: string; to: string; promotion?: string }) {
     if (socket !== this.player) return;
 
-    // Validate it's the player's turn
     const isPlayerTurn =
       (this.playerColor === "white" && this.board.turn() === "w") ||
       (this.playerColor === "black" && this.board.turn() === "b");
@@ -238,7 +233,6 @@ export class StockfishGame {
       this.sendTimeUpdate();
     }
 
-    // AI responds
     this.requestStockfishMove();
   }
 
@@ -268,30 +262,63 @@ export class StockfishGame {
     );
   }
 
-  private handleGameOver() {
+  private handleGameOver(reason?: string, winner?: string) {
     if (this.timeUpdateInterval) {
       clearInterval(this.timeUpdateInterval);
       this.timeUpdateInterval = null;
     }
 
-    const winner = this.board.turn() === "w" ? "black" : "white";
-    let reason = "checkmate";
-    if (this.board.isDraw()) reason = "draw";
-    else if (this.board.isStalemate()) reason = "stalemate";
-    else if (this.board.isThreefoldRepetition()) reason = "repetition";
-    else if (this.board.isInsufficientMaterial()) reason = "insufficient material";
+    let finalWinner = winner ?? null;
+    let finalReason = reason ?? "checkmate";
 
-    const finalWinner = this.board.isDraw() ? null : winner;
+    if (!reason) {
+      const turnWinner = this.board.turn() === "w" ? "black" : "white";
+      if (this.board.isDraw()) { finalReason = "draw"; finalWinner = null; }
+      else if (this.board.isStalemate()) { finalReason = "stalemate"; finalWinner = null; }
+      else if (this.board.isThreefoldRepetition()) { finalReason = "repetition"; finalWinner = null; }
+      else if (this.board.isInsufficientMaterial()) { finalReason = "insufficient material"; finalWinner = null; }
+      else { finalWinner = turnWinner; }
+    }
 
     this.player.send(
       JSON.stringify({
         type: GAME_OVER,
-        payload: { winner: finalWinner, reason },
+        payload: { winner: finalWinner, reason: finalReason },
       })
     );
 
+    this.persistGameResult(finalWinner, finalReason);
     this.cleanup();
     if (this.onGameEnd) this.onGameEnd(this.gameId);
+  }
+
+  private async persistGameResult(winner: string | null, reason: string): Promise<void> {
+    if (this.dbUserId === null) return; // guest — don't save
+
+    const whiteUserId = this.playerColor === "white" ? this.dbUserId : null;
+    const blackUserId = this.playerColor === "black" ? this.dbUserId : null;
+
+    try {
+      await gameHistoryService.saveGameResult({
+        gameId: this.gameId,
+        whiteUserId,
+        blackUserId,
+        fen: this.board.fen(),
+        moveHistory: this.board.history({ verbose: true }).map((m: any) => ({
+          from: m.from,
+          to: m.to,
+          ...(m.promotion ? { promotion: m.promotion } : {}),
+        })),
+        moveCount: this.moveCount,
+        timeControl: this.timeControl ? this.timeControl / 60000 : null,
+        winner,
+        reason,
+        isVsComputer: true,
+        computerDifficulty: this.difficulty,
+      });
+    } catch (err) {
+      console.error("Failed to persist computer game result:", err);
+    }
   }
 
   private startTimeTracking() {
@@ -348,16 +375,7 @@ export class StockfishGame {
       clearInterval(this.timeUpdateInterval);
       this.timeUpdateInterval = null;
     }
-
-    this.player.send(
-      JSON.stringify({
-        type: GAME_OVER,
-        payload: { winner, reason: "timeout" },
-      })
-    );
-
-    this.cleanup();
-    if (this.onGameEnd) this.onGameEnd(this.gameId);
+    this.handleGameOver("timeout", winner);
   }
 
   cleanup() {

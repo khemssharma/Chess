@@ -13,26 +13,31 @@ interface GameRecord {
   status: string;
   winner: string | null;
   reason: string | null;
+  isVsComputer: boolean;
+  computerDifficulty: string | null;
   startedAt: string;
   finishedAt: string | null;
 }
 
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+    month: "short", day: "numeric", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
   });
 
 const resultLabel = (game: GameRecord, userId: number) => {
   if (!game.winner) return { text: "Draw", color: "text-yellow-400" };
-  const myColor =
-    game.whiteUser?.id === userId ? "white" : "black";
+  const myColor = game.whiteUser?.id === userId ? "white" : "black";
   return game.winner === myColor
     ? { text: "Win", color: "text-green-400" }
     : { text: "Loss", color: "text-red-400" };
+};
+
+const difficultyBadgeColor: Record<string, string> = {
+  easy: "bg-green-500/20 text-green-400 border-green-500/30",
+  medium: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+  hard: "bg-red-500/20 text-red-400 border-red-500/30",
+  expert: "bg-purple-500/20 text-purple-400 border-purple-500/30",
 };
 
 export const History = () => {
@@ -44,12 +49,11 @@ export const History = () => {
 
   useEffect(() => {
     if (!token) { navigate("/login"); return; }
-
     fetch(`${API_URL}/api/games`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((r) => r.json())
-      .then((data) => setGames(data.games ?? []))
+      .then(r => r.json())
+      .then(data => setGames(data.games ?? []))
       .catch(() => setError("Failed to load game history"))
       .finally(() => setLoading(false));
   }, [token]);
@@ -85,18 +89,16 @@ export const History = () => {
 
       <main className="max-w-4xl mx-auto px-4 py-10">
         <h1 className="text-3xl font-bold mb-2">Game History</h1>
-        <p className="text-gray-400 mb-8">Your last {games.length} recorded games</p>
+        <p className="text-gray-400 mb-8">
+          Your last {games.length} recorded game{games.length !== 1 ? "s" : ""} · click any row to replay
+        </p>
 
         {loading && (
-          <div className="text-center py-20 text-gray-400 animate-pulse">
-            Loading games...
-          </div>
+          <div className="text-center py-20 text-gray-400 animate-pulse">Loading games...</div>
         )}
 
         {error && (
-          <div className="bg-red-500/20 border border-red-500/40 text-red-300 rounded-lg px-4 py-3">
-            {error}
-          </div>
+          <div className="bg-red-500/20 border border-red-500/40 text-red-300 rounded-lg px-4 py-3">{error}</div>
         )}
 
         {!loading && !error && games.length === 0 && (
@@ -114,7 +116,7 @@ export const History = () => {
 
         {!loading && games.length > 0 && (
           <div className="space-y-3">
-            {/* Summary row */}
+            {/* Stats summary */}
             <div className="grid grid-cols-3 gap-4 mb-6">
               {(() => {
                 const wins = games.filter(g => {
@@ -148,26 +150,30 @@ export const History = () => {
             </div>
 
             {/* Game list */}
-            {games.map((game) => {
+            {games.map(game => {
               const result = user ? resultLabel(game, user.id) : { text: "—", color: "text-gray-400" };
               const myColor = game.whiteUser?.id === user?.id ? "white" : "black";
-              const opponent = myColor === "white" ? game.blackUser : game.whiteUser;
+              const opponentName = game.isVsComputer
+                ? `🤖 Stockfish`
+                : (myColor === "white" ? game.blackUser?.username : game.whiteUser?.username) ?? "Guest";
 
               return (
                 <div
                   key={game.id}
-                  className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-xl px-5 py-4 flex items-center justify-between transition"
+                  onClick={() => navigate(`/history/${game.id}`)}
+                  className="bg-white/5 border border-white/10 hover:bg-white/10 hover:border-purple-500/40 rounded-xl px-5 py-4 flex items-center justify-between transition cursor-pointer group"
                 >
                   <div className="flex items-center gap-4">
-                    {/* Color indicator */}
                     <div className="text-2xl">{myColor === "white" ? "⚪" : "⚫"}</div>
 
                     <div>
-                      <div className="font-medium">
-                        vs{" "}
-                        <span className="text-purple-300">
-                          {opponent?.username ?? "Guest"}
-                        </span>
+                      <div className="font-medium flex items-center gap-2 flex-wrap">
+                        vs <span className="text-purple-300">{opponentName}</span>
+                        {game.isVsComputer && game.computerDifficulty && (
+                          <span className={`text-xs px-2 py-0.5 rounded-full border capitalize ${difficultyBadgeColor[game.computerDifficulty] ?? "bg-slate-600 text-gray-300 border-slate-500"}`}>
+                            {game.computerDifficulty}
+                          </span>
+                        )}
                       </div>
                       <div className="text-sm text-gray-400 mt-0.5">
                         {game.timeControl ? `${game.timeControl} min` : "Unlimited"} ·{" "}
@@ -177,13 +183,14 @@ export const History = () => {
                     </div>
                   </div>
 
-                  <div className="text-right">
-                    <div className={`text-lg font-bold ${result.color}`}>
-                      {result.text}
+                  <div className="flex items-center gap-3">
+                    <div className="text-right">
+                      <div className={`text-lg font-bold ${result.color}`}>{result.text}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">
+                        {game.finishedAt ? formatDate(game.finishedAt) : formatDate(game.startedAt)}
+                      </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-0.5">
-                      {game.finishedAt ? formatDate(game.finishedAt) : formatDate(game.startedAt)}
-                    </div>
+                    <div className="text-gray-600 group-hover:text-purple-400 transition text-lg">›</div>
                   </div>
                 </div>
               );

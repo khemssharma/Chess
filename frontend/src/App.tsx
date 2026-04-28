@@ -6,6 +6,7 @@ import { Game } from './screens/Game';
 import { Login } from './screens/Login';
 import { Register } from './screens/Register';
 import { History } from './screens/History';
+import { GameReplay } from './screens/GameReplay';
 
 // Redirect authenticated users away from login/register
 const GuestOnly = ({ children }: { children: React.ReactNode }) => {
@@ -28,15 +29,10 @@ function AppRoutes() {
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/game" element={<Game />} />
-          <Route path="/login" element={
-            <GuestOnly><Login /></GuestOnly>
-          } />
-          <Route path="/register" element={
-            <GuestOnly><Register /></GuestOnly>
-          } />
-          <Route path="/history" element={
-            <AuthOnly><History /></AuthOnly>
-          } />
+          <Route path="/login" element={<GuestOnly><Login /></GuestOnly>} />
+          <Route path="/register" element={<GuestOnly><Register /></GuestOnly>} />
+          <Route path="/history" element={<AuthOnly><History /></AuthOnly>} />
+          <Route path="/history/:gameId" element={<AuthOnly><GameReplay /></AuthOnly>} />
           <Route path="*" element={<Navigate to="/game" replace />} />
         </Routes>
       </BrowserRouter>
