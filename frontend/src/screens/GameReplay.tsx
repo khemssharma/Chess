@@ -22,11 +22,6 @@ interface FullGame {
   finishedAt: string | null;
 }
 
-const PIECE_IMGS: Record<string, string> = {
-  wK: "K copy", wQ: "Q copy", wR: "R copy", wB: "B copy", wN: "N copy", wP: "P copy",
-  bK: "k", bQ: "q", bR: "r", bB: "b", bN: "n", bP: "p",
-};
-
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, {
     month: "short", day: "numeric", year: "numeric",
@@ -231,18 +226,15 @@ export const GameReplay = () => {
                         const isLastFrom = lastMove?.from === squareName;
                         const isLastTo = lastMove?.to === squareName;
 
-                        let bg = isLight ? "bg-amber-100" : "bg-amber-800";
-                        if (isLastFrom || isLastTo) bg = isLight ? "bg-yellow-300" : "bg-yellow-500";
-
-                        const pieceKey = sq ? `${sq.color}${sq.type.toUpperCase()}` : null;
-                        const imgSrc = pieceKey ? PIECE_IMGS[pieceKey] : null;
+                        let bg = isLight ? "bg-green-500" : "bg-slate-500";
+                        if (isLastFrom || isLastTo) bg = isLight ? "bg-yellow-400" : "bg-yellow-600";
 
                         return (
                           <div key={j} className={`${bg} relative flex-1 aspect-square flex items-center justify-center`}>
-                            {imgSrc && (
+                            {sq && (
                               <img
-                                src={`/${imgSrc}.png`}
-                                className="w-[80%] h-[80%] object-contain select-none"
+                                src={`/${sq.color === "b" ? sq.type : `${sq.type.toUpperCase()} copy`}.png`}
+                                className="w-3/5 h-3/5 object-contain select-none"
                                 draggable={false}
                               />
                             )}
