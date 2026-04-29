@@ -1,11 +1,11 @@
 import { Chess, Color, PieceSymbol, Square } from "chess.js";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { MOVE } from "../screens/Game";
 
-export const ChessBoard = ({ 
-    chess, 
-    board, 
-    socket, 
+export const ChessBoard = ({
+    chess,
+    board,
+    socket,
     setBoard,
     validMoves,
     onSquareClick,
@@ -24,221 +24,244 @@ export const ChessBoard = ({
         color: Color;
     } | null)[][];
     socket: WebSocket;
-    validMoves?: Array<{from: string, to: string, promotion?: string}>;
+    validMoves?: Array<{ from: string; to: string; promotion?: string }>;
     onSquareClick?: (square: string) => void;
     playerColor?: "white" | "black";
     disabled?: boolean;
 }) => {
     const [from, setFrom] = useState<null | Square>(null);
     const [showPromotion, setShowPromotion] = useState(false);
-    const [promotionMove, setPromotionMove] = useState<{from: Square, to: Square} | null>(null);
+    const [promotionMove, setPromotionMove] = useState<{ from: Square; to: Square } | null>(null);
 
-    // Helper function to check if a piece belongs to the current player
+    // Drag state
+    const [dragFrom, setDragFrom] = useState<Square | null>(null);
+    const [dragOver, setDragOver] = useState<Square | null>(null);
+    const boardRef = useRef<HTMLDivElement>(null);
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
     const isPlayerPiece = (square: Square) => {
         const piece = chess.get(square);
         if (!piece) return false;
-        const pieceColor = piece.color === 'w' ? 'white' : 'black';
-        return pieceColor === playerColor;
+        return (piece.color === "w" ? "white" : "black") === playerColor;
     };
 
-    // Helper function to check if a move is a pawn promotion
     const isPawnPromotion = (from: Square, to: Square) => {
         const piece = chess.get(from);
-        if (!piece || piece.type !== 'p') return false;
-        
+        if (!piece || piece.type !== "p") return false;
         const toRank = parseInt(to[1]);
-        return (piece.color === 'w' && toRank === 8) || (piece.color === 'b' && toRank === 1);
+        return (piece.color === "w" && toRank === 8) || (piece.color === "b" && toRank === 1);
     };
 
-    // Handle promotion piece selection
-    const handlePromotion = (piece: 'q' | 'r' | 'b' | 'n') => {
-        if (!promotionMove) return;
+    const isValidMove = (square: string) => {
+        if (!validMoves || validMoves.length === 0) return false;
+        return validMoves.some((m) => m.to === square);
+    };
 
-        // Send move to server with promotion
+    // ── Shared move execution ─────────────────────────────────────────────────
+
+    const executeMove = (fromSq: Square, toSq: Square, promotion?: "q" | "r" | "b" | "n") => {
         socket.send(JSON.stringify({
             type: MOVE,
-            payload: {
-                move: {
-                    from: promotionMove.from,
-                    to: promotionMove.to,
-                    promotion: piece
-                }
-            }
+            payload: { move: { from: fromSq, to: toSq, ...(promotion ? { promotion } : {}) } }
         }));
-
-        // Make move locally
         try {
-            chess.move({
-                from: promotionMove.from,
-                to: promotionMove.to,
-                promotion: piece
-            });
+            chess.move({ from: fromSq, to: toSq, ...(promotion ? { promotion } : {}) });
             setBoard(chess.board());
-        } catch (e) {
-            console.log("Invalid promotion move");
+        } catch {
+            console.log("Invalid move attempted");
         }
+    };
 
-        // Reset states
+    const handlePromotion = (piece: "q" | "r" | "b" | "n") => {
+        if (!promotionMove) return;
+        executeMove(promotionMove.from, promotionMove.to, piece);
         setShowPromotion(false);
         setPromotionMove(null);
         setFrom(null);
     };
 
-    // Check if a square is a valid move destination
-    const isValidMove = (square: string) => {
-        if (!validMoves || validMoves.length === 0) return false;
-        return validMoves.some(move => move.to === square);
+    // ── Click handlers ────────────────────────────────────────────────────────
+
+    const handleSquareClick = (squareRepresentation: Square) => {
+        if (disabled) return;
+
+        if (!from) {
+            if (!isPlayerPiece(squareRepresentation)) return;
+            setFrom(squareRepresentation);
+            onSquareClick?.(squareRepresentation);
+        } else {
+            if (squareRepresentation === from) {
+                setFrom(null);
+                onSquareClick?.("");
+                return;
+            }
+
+            if (isPawnPromotion(from, squareRepresentation)) {
+                setPromotionMove({ from, to: squareRepresentation });
+                setShowPromotion(true);
+                return;
+            }
+
+            executeMove(from, squareRepresentation);
+            setFrom(null);
+        }
     };
 
-    // Check if a square is the selected "from" square
-    const isSelectedSquare = (square: string) => {
-        return from === square;
+    // ── Drag handlers ─────────────────────────────────────────────────────────
+
+    const handleDragStart = (e: React.DragEvent, square: Square) => {
+        if (disabled || !isPlayerPiece(square)) {
+            e.preventDefault();
+            return;
+        }
+        setDragFrom(square);
+        setFrom(square);
+        onSquareClick?.(square);
+
+        // Use a transparent 1x1 pixel as the default drag ghost (we show our own)
+        const ghost = document.createElement("img");
+        ghost.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        e.dataTransfer.setDragImage(ghost, 0, 0);
+        e.dataTransfer.effectAllowed = "move";
     };
 
-    // Flip board if player is black
-    const displayBoard = playerColor === "black" ? [...board].reverse().map(row => [...row].reverse()) : board;
+    const handleDragOver = (e: React.DragEvent, square: Square) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        setDragOver(square);
+    };
 
-    return <div className="text-white-200 w-full">
-        <div className="w-full aspect-square max-w-md mx-auto">
-        {displayBoard.map((row, i) => {
-            return <div key={i} className="flex">
-                {row.map((square, j) => {
-                    // Calculate the actual square coordinates considering board flip
-                    const file = playerColor === "black" ? 7 - (j % 8) : (j % 8);
-                    const rank = playerColor === "black" ? i + 1 : 8 - i;
-                    const squareRepresentation = String.fromCharCode(97 + file) + "" + rank as Square;
-                    const isLightSquare = (i + j) % 2 === 0;
-                    const isValid = isValidMove(squareRepresentation);
-                    const isSelected = isSelectedSquare(squareRepresentation);
+    const handleDragLeave = () => {
+        setDragOver(null);
+    };
 
-                    // Determine square color
-                    let bgColor = isLightSquare ? 'bg-green-500' : 'bg-slate-500';
-                    if (isSelected) {
-                        bgColor = isLightSquare ? 'bg-yellow-400' : 'bg-yellow-600';
-                    }
+    const handleDrop = (e: React.DragEvent, toSq: Square) => {
+        e.preventDefault();
+        setDragOver(null);
 
-                    return <div 
-                        onClick={() => {
-                            if (disabled) return; // Prevent interaction when disabled
-                            
-                            if (!from) {
-                                // Only allow selecting pieces that belong to the current player
-                                if (!isPlayerPiece(squareRepresentation)) {
-                                    return;
-                                }
-                                setFrom(squareRepresentation);
-                                // Request valid moves when selecting a piece
-                                if (onSquareClick) {
-                                    onSquareClick(squareRepresentation);
-                                }
-                            } else {
-                                // Only make move if it's valid or if we're clicking the same square to deselect
-                                if (squareRepresentation === from) {
-                                    // Deselect the piece
-                                    setFrom(null);
-                                    if (onSquareClick) {
-                                        onSquareClick(''); // Clear valid moves
-                                    }
-                                    return;
-                                }
+        if (!dragFrom || toSq === dragFrom) {
+            setDragFrom(null);
+            return;
+        }
 
-                                // Check if this is a pawn promotion
-                                if (isPawnPromotion(from, squareRepresentation)) {
-                                    setPromotionMove({ from, to: squareRepresentation });
-                                    setShowPromotion(true);
-                                    return;
-                                }
+        if (isPawnPromotion(dragFrom, toSq)) {
+            setPromotionMove({ from: dragFrom, to: toSq });
+            setShowPromotion(true);
+            setDragFrom(null);
+            setFrom(null);
+            return;
+        }
 
-                                // Send move to server (server will validate)
-                                socket.send(JSON.stringify({
-                                    type: MOVE,
-                                    payload: {
-                                        move: {
-                                            from,
-                                            to: squareRepresentation
-                                        }
-                                    }
-                                }))
-                                
-                                // Try to make the move locally
-                                try {
-                                    chess.move({
-                                        from,
-                                        to: squareRepresentation
-                                    });
-                                    setBoard(chess.board());
-                                } catch (e) {
-                                    // If move is invalid, the server will reject it
-                                    console.log("Invalid move attempted");
-                                }
-                                
-                                setFrom(null);
-                                console.log({
-                                    from,
-                                    to: squareRepresentation
-                                })
+        executeMove(dragFrom, toSq);
+        setDragFrom(null);
+        setFrom(null);
+        onSquareClick?.("");
+    };
+
+    const handleDragEnd = () => {
+        setDragFrom(null);
+        setDragOver(null);
+    };
+
+    // ── Board rendering ───────────────────────────────────────────────────────
+
+    const displayBoard = playerColor === "black"
+        ? [...board].reverse().map((row) => [...row].reverse())
+        : board;
+
+    return (
+        <div className="text-white-200 w-full relative">
+            <div ref={boardRef} className="w-full aspect-square max-w-md mx-auto select-none">
+                {displayBoard.map((row, i) => (
+                    <div key={i} className="flex">
+                        {row.map((square, j) => {
+                            const file = playerColor === "black" ? 7 - (j % 8) : j % 8;
+                            const rank = playerColor === "black" ? i + 1 : 8 - i;
+                            const squareRepresentation = (String.fromCharCode(97 + file) + rank) as Square;
+
+                            const isLightSquare = (i + j) % 2 === 0;
+                            const isSelected = from === squareRepresentation;
+                            const isDragSource = dragFrom === squareRepresentation;
+                            const isDragTarget = dragOver === squareRepresentation;
+                            const isValid = isValidMove(squareRepresentation);
+
+                            let bgColor = isLightSquare ? "bg-green-500" : "bg-slate-500";
+                            if (isSelected || isDragSource) {
+                                bgColor = isLightSquare ? "bg-yellow-400" : "bg-yellow-600";
                             }
-                        }} 
-                        key={j} 
-                        className={`w-full aspect-square ${bgColor} relative ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-                    >
-                        <div className="w-full justify-center flex h-full">
-                            <div className="h-full justify-center flex flex-col">
-                                {square ? <img className="w-1/2 md:w-3/5" src={`/${square?.color === "b" ? square?.type : `${square?.type?.toUpperCase()} copy`}.png`} /> : null}
-                            </div>
-                        </div>
-                        
-                        {/* Valid move indicator */}
-                        {isValid && (
-                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                                {square ? (
-                                    // If there's a piece on this square (capture), show a ring
-                                    <div className="w-4/5 aspect-square border-2 md:border-3 border-red-500 rounded-full opacity-60"></div>
-                                ) : (
-                                    // If empty square, show a dot
-                                    <div className="w-1/5 aspect-square bg-gray-800 rounded-full opacity-60"></div>
-                                )}
-                            </div>
-                        )}
+                            if (isDragTarget && isValid) {
+                                bgColor = isLightSquare ? "bg-blue-300" : "bg-blue-500";
+                            }
+
+                            const piece = square;
+                            const canDrag = !disabled && piece && isPlayerPiece(squareRepresentation);
+
+                            return (
+                                <div
+                                    key={j}
+                                    className={`w-full aspect-square ${bgColor} relative ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                                    onClick={() => handleSquareClick(squareRepresentation)}
+                                    onDragOver={(e) => handleDragOver(e, squareRepresentation)}
+                                    onDragLeave={handleDragLeave}
+                                    onDrop={(e) => handleDrop(e, squareRepresentation)}
+                                >
+                                    <div className="w-full justify-center flex h-full">
+                                        <div className="h-full justify-center flex flex-col">
+                                            {piece && (
+                                                <img
+                                                    draggable={!!canDrag}
+                                                    onDragStart={(e) => handleDragStart(e, squareRepresentation)}
+                                                    onDragEnd={handleDragEnd}
+                                                    className={`w-1/2 md:w-3/5 transition-opacity duration-75 ${isDragSource ? "opacity-30" : "opacity-100"} ${canDrag ? "cursor-grab active:cursor-grabbing" : ""}`}
+                                                    src={`/${piece.color === "b" ? piece.type : `${piece.type.toUpperCase()} copy`}.png`}
+                                                    alt={`${piece.color}${piece.type}`}
+                                                />
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Valid move indicator */}
+                                    {isValid && (
+                                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                            {piece ? (
+                                                <div className="w-4/5 aspect-square border-2 md:border-3 border-red-500 rounded-full opacity-60" />
+                                            ) : (
+                                                <div className="w-1/5 aspect-square bg-gray-800 rounded-full opacity-60" />
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
                     </div>
-                })}
+                ))}
             </div>
-        })}
-        </div>
-        
-        {/* Promotion Dialog */}
-        {showPromotion && (
-            <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-                <div className="bg-white p-4 md:p-6 rounded-lg shadow-2xl mx-4">
-                    <h3 className="text-black text-lg md:text-xl font-bold mb-3 md:mb-4 text-center">Choose Promotion</h3>
-                    <div className="flex gap-2 md:gap-4">
-                        <button 
-                            onClick={() => handlePromotion('q')}
-                            className="w-14 h-14 md:w-20 md:h-20 bg-green-500 hover:bg-green-600 rounded-lg flex items-center justify-center border-2 md:border-4 border-green-700 transition-all hover:scale-110"
-                        >
-                            <img src={`/${playerColor === "white" ? "Q copy" : "q"}.png`} alt="Queen" className="w-10 md:w-14" />
-                        </button>
-                        <button 
-                            onClick={() => handlePromotion('r')}
-                            className="w-14 h-14 md:w-20 md:h-20 bg-blue-500 hover:bg-blue-600 rounded-lg flex items-center justify-center border-2 md:border-4 border-blue-700 transition-all hover:scale-110"
-                        >
-                            <img src={`/${playerColor === "white" ? "R copy" : "r"}.png`} alt="Rook" className="w-10 md:w-14" />
-                        </button>
-                        <button 
-                            onClick={() => handlePromotion('b')}
-                            className="w-14 h-14 md:w-20 md:h-20 bg-purple-500 hover:bg-purple-600 rounded-lg flex items-center justify-center border-2 md:border-4 border-purple-700 transition-all hover:scale-110"
-                        >
-                            <img src={`/${playerColor === "white" ? "B copy" : "b"}.png`} alt="Bishop" className="w-10 md:w-14" />
-                        </button>
-                        <button 
-                            onClick={() => handlePromotion('n')}
-                            className="w-14 h-14 md:w-20 md:h-20 bg-orange-500 hover:bg-orange-600 rounded-lg flex items-center justify-center border-2 md:border-4 border-orange-700 transition-all hover:scale-110"
-                        >
-                            <img src={`/${playerColor === "white" ? "N copy" : "n"}.png`} alt="Knight" className="w-10 md:w-14" />
-                        </button>
+
+            {/* Promotion Dialog */}
+            {showPromotion && (
+                <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+                    <div className="bg-white p-4 md:p-6 rounded-lg shadow-2xl mx-4">
+                        <h3 className="text-black text-lg md:text-xl font-bold mb-3 md:mb-4 text-center">Choose Promotion</h3>
+                        <div className="flex gap-2 md:gap-4">
+                            {(["q", "r", "b", "n"] as const).map((piece, idx) => {
+                                const colors = ["bg-green-500 hover:bg-green-600 border-green-700", "bg-blue-500 hover:bg-blue-600 border-blue-700", "bg-purple-500 hover:bg-purple-600 border-purple-700", "bg-orange-500 hover:bg-orange-600 border-orange-700"];
+                                const labels = ["Queen", "Rook", "Bishop", "Knight"];
+                                const imgName = playerColor === "white" ? `${piece.toUpperCase()} copy` : piece;
+                                return (
+                                    <button
+                                        key={piece}
+                                        onClick={() => handlePromotion(piece)}
+                                        className={`w-14 h-14 md:w-20 md:h-20 ${colors[idx]} rounded-lg flex items-center justify-center border-2 md:border-4 transition-all hover:scale-110`}
+                                    >
+                                        <img src={`/${imgName}.png`} alt={labels[idx]} className="w-10 md:w-14" />
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </div>
                 </div>
-            </div>
-        )}
-    </div>
-}
+            )}
+        </div>
+    );
+};

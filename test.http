@@ -20,3 +20,11 @@ Content-Type: application/json
 ### Get User By ID (Requires Bearer Token)
 GET http://localhost:3000/api/user/1
 Authorization: Bearer {token}
+
+### Game Analysis (Requires Bearer Token)
+# Replace {token} with a valid JWT and {gameId} with a real game ID from your history
+POST http://localhost:3000/api/games/{gameId}/analyze
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{}
