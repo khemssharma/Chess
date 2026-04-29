@@ -171,12 +171,14 @@ async function getStockfishEval(fen: string, depth: number = 18): Promise<{ scor
       }
     });
 
-    sf.stdin.write("uci\n");
-    sf.stdin.write("setoption name Threads value 1\n");
-    sf.stdin.write("setoption name Hash value 16\n");
-    sf.stdin.write("isready\n");
-    sf.stdin.write(`position fen ${fen}\n`);
-    sf.stdin.write(`go depth ${depth}\n`);
+    if (sf.stdin) {
+      sf.stdin.write("uci\n");
+      sf.stdin.write("setoption name Threads value 1\n");
+      sf.stdin.write("setoption name Hash value 16\n");
+      sf.stdin.write("isready\n");
+      sf.stdin.write(`position fen ${fen}\n`);
+      sf.stdin.write(`go depth ${depth}\n`);
+    }
   });
 }
 
