@@ -10,6 +10,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: CLIENT_URL
+        value: https://chess-app-jii7.onrender.com
+
   - type: static_site
     name: chess-frontend
     env: static
@@ -19,5 +22,11 @@ services:
     buildCommand: npm install && npm run build
     publishPath: dist
     envVars:
+      - key: VITE_API_URL
+        value: https://chess-gf05.onrender.com
       - key: VITE_WS_URL
-        value: wss://chess-backend.onrender.com
+        value: wss://chess-gf05.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
