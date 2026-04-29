@@ -102,7 +102,6 @@ export const GameReplay = () => {
   const [analysis, setAnalysis] = useState<GameAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
-  const [showAnalysis, setShowAnalysis] = useState(false);
 
   // Build board snapshots
   useEffect(() => {
@@ -175,7 +174,6 @@ export const GameReplay = () => {
       const data = await res.json();
       if (data.analysis) {
         setAnalysis(data.analysis);
-        setShowAnalysis(true);
       } else {
         setAnalysisError(data.message || "Analysis failed");
       }
