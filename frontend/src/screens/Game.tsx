@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "../components/Button";
 import { ChessBoard } from "../components/ChessBoard";
@@ -55,6 +55,10 @@ export const Game = () => {
     const [vsComputer, setVsComputer] = useState(false);
     const [difficulty, setDifficulty] = useState<Difficulty>("medium");
 
+    // Live move list
+    const [liveMoves, setLiveMoves] = useState<string[]>([]);
+    const moveListRef = useRef<HTMLDivElement>(null);
+
     // Attempt reconnect on socket connect if we have a stored session
     useEffect(() => {
         if (!socket) return;
@@ -85,6 +89,7 @@ export const Game = () => {
                     setPlayerColor(message.payload.color);
                     setVsComputer(!!message.payload.vsComputer);
                     if (message.payload.difficulty) setDifficulty(message.payload.difficulty);
+                    setLiveMoves([]);
 
                     if (message.payload.timeControl) {
                         const ms = message.payload.timeControl * 60 * 1000;
@@ -109,13 +114,16 @@ export const Game = () => {
                     setSelectedTimeControl(message.payload.timeControl);
                     setWhiteTime(message.payload.whiteTime ?? null);
                     setBlackTime(message.payload.blackTime ?? null);
+                    // Rebuild SAN move list from restored history
+                    setLiveMoves(restored.history());
                     break;
                 }
 
                 case MOVE: {
-                    chess.move(message.payload);
+                    const result = chess.move(message.payload);
                     setBoard(chess.board());
                     setValidMoves([]);
+                    if (result) setLiveMoves(prev => [...prev, result.san]);
                     break;
                 }
 
@@ -201,6 +209,7 @@ export const Game = () => {
         setDisconnectSecondsLeft(null);
         setVsComputer(false);
         setGameMode(null);
+        setLiveMoves([]);
     };
 
     const startGame = (timeControl: number | null) => {
@@ -210,6 +219,13 @@ export const Game = () => {
         if (timeControl !== null) payload.payload = { timeControl };
         socket?.send(JSON.stringify(payload));
     };
+
+    // Auto-scroll move list to bottom on new move
+    useEffect(() => {
+        if (moveListRef.current) {
+            moveListRef.current.scrollTop = moveListRef.current.scrollHeight;
+        }
+    }, [liveMoves]);
 
     const startComputerGame = (timeControl: number | null) => {
         const color = selectedColor === "random"
@@ -531,37 +547,76 @@ export const Game = () => {
                             )}
 
                             {started && !reconnecting && (
-                                <div className="text-white text-center space-y-4">
-                                    <div className="text-lg font-bold">You are playing as</div>
-                                    <div className="text-2xl">
-                                        {playerColor === "white" ? "⚪ White" : "⚫ Black"}
+                                <div className="flex flex-col gap-3 h-full">
+                                    {/* Players */}
+                                    <div className="bg-slate-800 rounded-xl p-3 border border-slate-700">
+                                        <div className="flex items-center justify-between text-sm">
+                                            <span className="text-gray-300 flex items-center gap-1">
+                                                {playerColor === "black" ? "⚪" : "⚫"}
+                                                {vsComputer
+                                                    ? <span>🤖 Stockfish <span className="text-xs text-gray-500 capitalize">({difficulty})</span></span>
+                                                    : <span className="text-gray-400">Opponent</span>
+                                                }
+                                            </span>
+                                        </div>
+                                        <div className="border-t border-slate-700 my-2" />
+                                        <div className="flex items-center justify-between text-sm">
+                                            <span className="text-white font-medium flex items-center gap-1">
+                                                {playerColor === "white" ? "⚪" : "⚫"}
+                                                {user?.username ?? "You"}
+                                            </span>
+                                            {user && !vsComputer && (
+                                                <span className="text-xs text-green-400">✓ saving</span>
+                                            )}
+                                        </div>
                                     </div>
-                                    {vsComputer && (
-                                        <div className="bg-slate-800 rounded-xl p-3 border border-slate-600">
-                                            <div className="text-sm text-gray-400 mb-1">Opponent</div>
-                                            <div className="text-base font-bold">
-                                                🤖 Stockfish
-                                            </div>
-                                            <div className="text-xs text-gray-400 capitalize mt-1">
-                                                {difficulty === "easy" && "🟢 "}
-                                                {difficulty === "medium" && "🟡 "}
-                                                {difficulty === "hard" && "🔴 "}
-                                                {difficulty === "expert" && "💀 "}
-                                                {difficulty} difficulty
-                                            </div>
+
+                                    {/* Move list */}
+                                    <div className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col flex-1 min-h-0">
+                                        <div className="px-3 py-2 border-b border-slate-700 flex items-center justify-between">
+                                            <span className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Moves</span>
+                                            <span className="text-xs text-gray-500">{liveMoves.length > 0 ? `${Math.ceil(liveMoves.length / 2)} played` : "Game starts"}</span>
                                         </div>
-                                    )}
-                                    {whiteTime !== null && (
-                                        <div className="text-sm text-gray-400">
-                                            {selectedTimeControl} min game
+
+                                        <div
+                                            ref={moveListRef}
+                                            className="overflow-y-auto flex-1 p-1"
+                                            style={{ maxHeight: "260px" }}
+                                        >
+                                            {liveMoves.length === 0 ? (
+                                                <div className="text-center text-gray-600 text-xs py-6">No moves yet</div>
+                                            ) : (
+                                                <table className="w-full text-xs">
+                                                    <tbody>
+                                                        {Array.from({ length: Math.ceil(liveMoves.length / 2) }, (_, i) => {
+                                                            const white = liveMoves[i * 2];
+                                                            const black = liveMoves[i * 2 + 1];
+                                                            const isLastPair = i === Math.ceil(liveMoves.length / 2) - 1;
+                                                            return (
+                                                                <tr
+                                                                    key={i}
+                                                                    className={`${isLastPair ? "bg-purple-600/20" : "hover:bg-white/5"}`}
+                                                                >
+                                                                    <td className="text-gray-600 w-6 py-1 pl-2 select-none">{i + 1}</td>
+                                                                    <td className={`font-mono py-1 px-2 ${!black && isLastPair ? "text-white font-bold" : "text-gray-300"}`}>{white}</td>
+                                                                    <td className={`font-mono py-1 px-2 ${black && isLastPair ? "text-white font-bold" : "text-gray-400"}`}>{black ?? ""}</td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            )}
                                         </div>
-                                    )}
-                                    {user && !vsComputer && (
-                                        <div className="mt-4 pt-4 border-t border-slate-700">
-                                            <p className="text-xs text-green-400">
-                                                ✓ Game will be saved to your profile
-                                            </p>
-                                        </div>
+                                    </div>
+
+                                    {/* Resign / New game */}
+                                    {!gameOver && (
+                                        <button
+                                            onClick={resetGame}
+                                            className="w-full text-xs text-gray-500 hover:text-red-400 transition py-1 border border-slate-700 rounded-lg hover:border-red-500/40"
+                                        >
+                                            Resign / New Game
+                                        </button>
                                     )}
                                 </div>
                             )}
