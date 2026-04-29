@@ -13,28 +13,22 @@ import { verifyToken } from "./utils/jwt";
 
 const app = express();
 
-// Support comma-separated origins in CLIENT_URL, e.g. "https://a.onrender.com,https://b.onrender.com"
+// Allow all origins — safe for this app since auth is JWT-based, not cookie-based.
+// To restrict later, set CLIENT_URL as a comma-separated list of allowed origins.
 const allowedOrigins = process.env.CLIENT_URL
   ? process.env.CLIENT_URL.split(",").map((o) => o.trim())
-  : [];
+  : null; // null = allow all
 
 const corsOptions: cors.CorsOptions = {
-  origin: (origin, callback) => {
-    // Allow requests with no origin (Render health checks, curl, mobile)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    callback(new Error(`CORS: origin ${origin} not allowed`));
-  },
+  origin: allowedOrigins ?? true, // true = reflect the request origin (allow all)
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "x-auth-token"],
   credentials: true,
 };
 
+// Must be the FIRST middleware — before express.json() and routes
 app.use(cors(corsOptions));
-// Explicitly handle OPTIONS preflight for all routes
-app.options("*", cors(corsOptions));
+app.options("*", cors(corsOptions)); // preflight for all routes
 
 app.use(express.json());
 app.use("/api", AuthRouter);
@@ -48,9 +42,6 @@ const wss = new WebSocketServer({ server });
 const gameManager = new GameManager();
 
 wss.on("connection", (ws: WebSocket, req) => {
-  // Clients pass their JWT as a query param:
-  //   ws://localhost:3000?token=<jwt>
-  // Guests (no token) can still play; their games are not linked to a profile.
   let dbUserId: number | null = null;
 
   try {
@@ -78,8 +69,8 @@ server.listen(PORT, () => {
   console.log(`  REST API  → http://localhost:${PORT}/api`);
   console.log(`  WebSocket → ws://localhost:${PORT}?token=<jwt>\n`);
   console.log(
-    allowedOrigins.length > 0
+    allowedOrigins
       ? `  CORS allowed for: ${allowedOrigins.join(", ")}\n`
-      : "  No CORS origins configured — allowing all origins\n"
+      : "  CORS: all origins allowed\n"
   );
 });
