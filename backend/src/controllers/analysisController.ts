@@ -25,7 +25,8 @@ class AnalysisController {
       const uid = Number(req.user.userId);
       const isParticipant =
         game.whiteUserId === uid ||
-        game.blackUserId === uid;
+        game.blackUserId === uid ||
+        game.isVsComputer;
       if (!isParticipant) {
         return res.status(403).json({ message: "Access denied" });
       }
