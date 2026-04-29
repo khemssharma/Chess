@@ -29,7 +29,7 @@ class GameController {
       const game = await gameHistoryService.getGameById(req.params.gameId);
       if (!game) return res.status(404).json({ message: "Game not found" });
 
-      const uid = req.user.userId;
+      const uid = Number(req.user.userId);
       const isParticipant =
         game.whiteUserId === uid ||
         game.blackUserId === uid;

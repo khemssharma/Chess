@@ -169,7 +169,10 @@ export const GameReplay = () => {
     try {
       const res = await fetch(`${API_URL}/api/games/${gameId}/analyze`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
       });
       const data = await res.json();
       if (data.analysis) {
