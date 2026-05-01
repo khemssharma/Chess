@@ -1,15 +1,19 @@
-# Changelog
 ## Features
 1. Play chess with a computer or with a friend online.
 2. This app also features `Stockfish Game Anaysis`.
 3. Games are saved in Redis until they're being played. 
 4. Users and Games (after termination) are saved permanently in PostgreSQL.
 5. App is written completely in TypeScript.
-## Screenshot
+## Screenshots
 ![Game](./screenshots/game.png)
 ![Analysis](./screenshots/analysis.png)
 ![History](./screenshots/game_history.png)
 ![Timeout](./screenshots/timeout.png)
+
+## Deployment
+
+DEPLOY_RENDER.md contains deployment instructions.
+
 
 ## Contribution
 (We welcome contributions! Please follow these steps to contribute to this project:)
