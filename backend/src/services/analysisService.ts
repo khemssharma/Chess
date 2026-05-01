@@ -139,6 +139,9 @@ async function getStockfishEval(fen: string, depth: number = 18): Promise<{ scor
         resolve({ score, bestMove, isMate, mateIn });
       }
     }, 5000);
+        sf.on('error', () => {
+                if (!resolved) { resolved = true; clearTimeout(timeout); resolve({ score: 0, bestMove: '', isMate: false }); }
+              });
 
     (sf.stdout as NodeJS.ReadableStream).setEncoding("utf8");
     (sf.stdout as NodeJS.ReadableStream).on("data", (data: string) => {
