@@ -1,11 +1,15 @@
 # Changelog
 ## Features
-1. Game is Playable and guaranteed to have a result.
-2. Games are being saved in redis (temporarily) and PostgreSQL (permanently) and a dozen players can play their own 2 player game.
+1. Play chess with a computer or with a friend online.
+2. This app also features `Stockfish Game Anaysis`.
+3. Games are saved in Redis until they're being played. 
+4. Users and Games (after termination) are saved permanently in PostgreSQL.
+5. App is written completely in TypeScript.
 ## Screenshot
-![Screenshot](./screenshots/game.png)
-![Screenshot](./screenshots/game_history.png)
-![Screenshot](./screenshots/timeout.png)
+![Game](./screenshots/game.png)
+![Analysis](./screenshots/analysis.png)
+![History](./screenshots/game_history.png)
+![Timeout](./screenshots/timeout.png)
 
 ## Contribution
 (We welcome contributions! Please follow these steps to contribute to this project:)

@@ -19,7 +19,7 @@ services:
     region: oregon
     branch: main
     rootDir: frontend
-    buildCommand: npm install && npm run build
+    buildCommand: npm install && curl -L https://github.com/official-stockfish/Stockfish/releases/download/sf_17/stockfish-ubuntu-x86-64-avx2.tar -o /tmp/sf.tar && tar -xf /tmp/sf.tar -C /tmp && cp /tmp/stockfish/stockfish-ubuntu-x86-64-avx2 ./stockfish-bin && chmod +x ./stockfish-bin && npx tsc
     staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
