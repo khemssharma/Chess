@@ -8,12 +8,14 @@ interface User {
   id: number;
   username: string;
   email: string;
+  avatar?: string | null;
 }
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   login: (email: string, password: string) => Promise<void>;
+  googleLogin: (accessToken: string) => Promise<void>;
   register: (username: string, email: string, password: string) => Promise<void>;
   logout: () => void;
   isLoading: boolean;
@@ -26,7 +28,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Restore session from localStorage on mount
   useEffect(() => {
     const storedToken = localStorage.getItem(TOKEN_KEY);
     const storedUser = localStorage.getItem(USER_KEY);
@@ -37,30 +38,43 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setIsLoading(false);
   }, []);
 
+  const setSession = (newToken: string, userData: User) => {
+    localStorage.setItem(TOKEN_KEY, newToken);
+    localStorage.setItem(USER_KEY, JSON.stringify(userData));
+    setToken(newToken);
+    setUser(userData);
+  };
+
   const login = async (email: string, password: string) => {
     const res = await fetch(`${API_URL}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
-
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.message || "Login failed");
     }
-
     const { token: newToken } = await res.json();
-
-    // Fetch the user's profile with the token
     const meRes = await fetch(`${API_URL}/api/auth/me`, {
       headers: { Authorization: `Bearer ${newToken}` },
     });
     const userData: User = await meRes.json();
+    setSession(newToken, userData);
+  };
 
-    localStorage.setItem(TOKEN_KEY, newToken);
-    localStorage.setItem(USER_KEY, JSON.stringify(userData));
-    setToken(newToken);
-    setUser(userData);
+  const googleLogin = async (accessToken: string) => {
+    const res = await fetch(`${API_URL}/api/auth/google`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_token: accessToken }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.message || "Google login failed");
+    }
+    const { token: newToken, user: userData } = await res.json();
+    setSession(newToken, userData);
   };
 
   const register = async (username: string, email: string, password: string) => {
@@ -69,13 +83,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, email, password }),
     });
-
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.message || "Registration failed");
     }
-
-    // Auto-login after register
     await login(email, password);
   };
 
@@ -89,7 +100,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, register, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, token, login, googleLogin, register, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );
