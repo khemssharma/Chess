@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import { Chess } from "chess.js";
+import path from "path";
 
 export type MoveClassification =
   | "brilliant"
@@ -111,7 +112,7 @@ function generateComment(
 
 async function getStockfishEval(fen: string, depth: number = 18): Promise<{ score: number; bestMove: string; isMate: boolean; mateIn?: number }> {
   return new Promise((resolve) => {
-    const candidates = ["stockfish", "/usr/games/stockfish", "/usr/bin/stockfish", "/usr/local/bin/stockfish"];
+    path.join(__dirname, "../../stockfish-bin"), "stockfish", "/usr/games/stockfish", "/usr/bin/stockfish", "/usr/local/bin/stockfish"];
     let sf: ReturnType<typeof spawn> | null = null;
 
     for (const bin of candidates) {
