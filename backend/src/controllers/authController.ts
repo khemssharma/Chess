@@ -1,6 +1,7 @@
 import AuthService from "../services/authServices";
 import { Request, Response } from "express";
 import { AuthenticatedRequest } from "../utils/types";
+import jwt from "jsonwebtoken";
 
 class AuthController {
   static signup = async (req: Request, res: Response) => {
@@ -34,8 +35,7 @@ class AuthController {
         return res.status(400).json({ message: "Google access token required" });
       }
       const token = await AuthService.googleLogin(access_token);
-      // Fetch user profile to return
-      const decoded = require("jsonwebtoken").decode(token) as { userId: number };
+      const decoded = jwt.decode(token) as { userId: number };
       const user = await AuthService.findUserById(decoded.userId);
       if (!user) return res.status(404).json({ message: "User not found" });
       const { password: _, ...safeUser } = user;
