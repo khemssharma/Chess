@@ -8,29 +8,30 @@ datasource db {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  username  String
-  email     String   @unique
-  password  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  gamesAsWhite Game[] @relation("WhitePlayer")
-  gamesAsBlack Game[] @relation("BlackPlayer")
+  id            Int      @id @default(autoincrement())
+  username      String
+  email         String   @unique
+  password      String?
+  googleId      String?  @unique
+  avatar        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  gamesAsWhite  Game[]   @relation("WhitePlayer")
+  gamesAsBlack  Game[]   @relation("BlackPlayer")
 }
 
 // Stores a completed (or abandoned) chess game
 model Game {
-  id          String   @id @default(uuid())
-  whiteUserId Int?
-  blackUserId Int?
+  id           String   @id @default(uuid())
+  whiteUserId  Int?
+  blackUserId  Int?
 
   whiteUser User? @relation("WhitePlayer", fields: [whiteUserId], references: [id])
   blackUser User? @relation("BlackPlayer", fields: [blackUserId], references: [id])
 
   // Final board state
   fen         String
-  moveHistory Json     // Array of { from, to, promotion? }
+  moveHistory Json   // Array of { from, to, promotion? }
   moveCount   Int
 
   // Time control in minutes (null = unlimited)
@@ -41,10 +42,9 @@ model Game {
   computerDifficulty String? // "easy" | "medium" | "hard" | "expert"
 
   // Game outcome
-  status  String   @default("active") // "active" | "over"
-  winner  String?  // "white" | "black" | null (draw)
-  reason  String?  // "checkmate" | "timeout" | "draw" | etc.
-
-  startedAt  DateTime @default(now())
+  status     String    @default("active") // "active" | "over"
+  winner     String?   // "white" | "black" | null (draw)
+  reason     String?   // "checkmate" | "timeout" | "draw" | etc.
+  startedAt  DateTime  @default(now())
   finishedAt DateTime?
 }
