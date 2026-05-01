@@ -8,6 +8,7 @@ const router = Router();
 
 router.post("/auth/register", AuthController.signup);
 router.post("/auth/login", AuthController.login);
+router.post("/auth/google", AuthController.googleLogin);
 router.get("/auth/me", AuthMiddleware.authenticate, AuthController.getMe);
 
 // Chess game history — protected routes
