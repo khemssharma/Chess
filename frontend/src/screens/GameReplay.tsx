@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { Chess } from "chess.js";
+import ChessAIAssistant from "../components/ChessAIAssistant";
 
 const API_URL = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
 
@@ -622,6 +623,24 @@ export const GameReplay = () => {
           </div>
         </div>
       </main>
+
+      {/* AI Chess Coach — only shown when Stockfish analysis is available */}
+      {analysis && game && token && (
+        <ChessAIAssistant
+          gameId={gameId!}
+          token={token}
+          analysis={analysis}
+          gameInfo={{
+            whitePlayer: game.whiteUser?.username ?? (myColor === "white" ? user?.username ?? "White" : opponentName),
+            blackPlayer: game.blackUser?.username ?? (myColor === "black" ? user?.username ?? "Black" : opponentName),
+            result: game.winner
+              ? `${game.winner.charAt(0).toUpperCase() + game.winner.slice(1)} wins by ${game.reason}`
+              : `Draw by ${game.reason}`,
+            moveCount: moves.length,
+          }}
+          currentMoveAnalysis={currentMoveAnalysis}
+        />
+      )}
     </div>
   );
 };
