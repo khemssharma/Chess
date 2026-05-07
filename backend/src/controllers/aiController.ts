@@ -19,12 +19,19 @@ function getOpenRouterHeaders() {
   };
 }
 
+// Updated free models list — ordered by reliability (May 2026)
 const FREE_MODELS = [
-  "openrouter/free",
-  "google/gemma-3-27b-it:free",
+  "deepseek/deepseek-r1:free",
   "meta-llama/llama-3.3-70b-instruct:free",
+  "google/gemma-3-27b-it:free",
+  "qwen/qwen3-235b-a22b:free",
   "mistralai/mistral-7b-instruct:free",
+  "openrouter/free",
 ];
+
+// Errors that mean "this model is unavailable, try the next one"
+const SKIP_MODEL_PATTERN =
+  /404|no endpoints found|no available|model_not_found|rate.?limit|overloaded|quota|context.?length|unavailable/i;
 
 async function callOpenRouter(
   messages: { role: string; content: string }[],
@@ -42,23 +49,47 @@ async function callOpenRouter(
 
       if (!res.ok) {
         const errText = await res.text();
-        if (res.status === 404 || errText.includes("No endpoints found")) {
-          lastError = new Error(errText);
-          continue; // try next model
+        // Skip to next model for known "not available" errors
+        if (res.status === 404 || res.status === 429 || res.status === 503 ||
+            SKIP_MODEL_PATTERN.test(errText)) {
+          lastError = new Error(`Model ${model} unavailable (${res.status}): ${errText.slice(0, 200)}`);
+          console.warn(`[AI] Skipping model ${model}:`, lastError.message);
+          continue;
         }
         throw new Error(`OpenRouter ${res.status}: ${errText}`);
       }
 
       const data = (await res.json()) as {
         choices?: { message?: { content?: string } }[];
+        error?: { message?: string };
       };
-      return data.choices?.[0]?.message?.content?.trim() ?? "";
-    } catch (err) {
-      const msg = (err as Error).message ?? "";
-      if (/404|No endpoints found|no available/i.test(msg)) {
-        lastError = err as Error;
+
+      // OpenRouter can return 200 with an error body
+      if (data.error?.message) {
+        if (SKIP_MODEL_PATTERN.test(data.error.message)) {
+          lastError = new Error(`Model ${model} error: ${data.error.message}`);
+          console.warn(`[AI] Skipping model ${model}:`, lastError.message);
+          continue;
+        }
+        throw new Error(data.error.message);
+      }
+
+      const content = data.choices?.[0]?.message?.content?.trim();
+      if (!content) {
+        lastError = new Error(`Model ${model} returned empty content`);
+        console.warn(`[AI] Skipping model ${model}: empty content`);
         continue;
       }
+
+      return content;
+    } catch (err) {
+      const msg = (err as Error).message ?? "";
+      if (SKIP_MODEL_PATTERN.test(msg)) {
+        lastError = err as Error;
+        console.warn(`[AI] Skipping model ${model}:`, msg);
+        continue;
+      }
+      // Unexpected error — re-throw immediately
       throw err;
     }
   }
@@ -124,14 +155,13 @@ class AIController {
       const moveSummary = criticalMoves
         .map(
           (m) =>
-            `Move ${m.moveIndex} (${m.color}, ${m.san}): ${m.classification} — eval swing ${(m.evalDelta / 100).toFixed(1)} pawns. Best was ${m.bestMove || "this move"}.`
+            `Move ${m.moveIndex} (${m.color}, ${m.san}): ${m.classification} — eval swing ${
+              (m.evalDelta / 100).toFixed(1)
+            } pawns. Best was ${m.bestMove || "this move"}.`
         )
         .join("\n");
 
-      const systemPrompt = `You are an expert chess coach providing concise, insightful game analysis. 
-Your tone is educational, encouraging, and precise. 
-Use chess terminology correctly but explain it briefly when needed.
-Format your response using markdown with clear sections.`;
+      const systemPrompt = `You are an expert chess coach providing concise, insightful game analysis. Your tone is educational, encouraging, and precise. Use chess terminology correctly but explain it briefly when needed. Format your response using markdown with clear sections.`;
 
       const userPrompt = `Analyse this chess game and provide an AI coach review:
 
@@ -175,7 +205,7 @@ Keep it under 400 words total. Be specific about the moves, not generic.`;
     }
   };
 
-  // ─── POST /api/games/:gameId/ai-chat ─────────────────────────────────────
+  // ─── POST /api/games/:gameId/ai-chat ───────────────────────────────────────
   // Follow-up Q&A about the game analysis
   static chat = async (req: AuthenticatedRequest, res: Response) => {
     try {
@@ -208,8 +238,11 @@ Keep it under 400 words total. Be specific about the moves, not generic.`;
 
       // If no session yet, seed it with basic game context
       if (!chatSessions.has(sessionKey)) {
-        const systemPrompt = `You are an expert chess coach analysing a game between ${gameInfo?.whitePlayer ?? "White"} and ${gameInfo?.blackPlayer ?? "Black"} (${gameInfo?.result ?? "game finished"}, ${gameInfo?.moveCount ?? "?"} moves). Answer questions about the game, specific moves, strategy, and chess concepts. Be concise and educational.`;
-
+        const systemPrompt = `You are an expert chess coach analysing a game between ${
+          gameInfo?.whitePlayer ?? "White"
+        } and ${gameInfo?.blackPlayer ?? "Black"} (${
+          gameInfo?.result ?? "game finished"
+        }, ${gameInfo?.moveCount ?? "?"} moves). Answer questions about the game, specific moves, strategy, and chess concepts. Be concise and educational.`;
         chatSessions.set(sessionKey, [
           { role: "system", content: systemPrompt },
         ]);
@@ -220,21 +253,20 @@ Keep it under 400 words total. Be specific about the moves, not generic.`;
       // Append move context to user message if provided
       let fullUserMessage = message;
       if (moveContext) {
-        fullUserMessage = `[Currently viewing Move ${moveContext.moveIndex}: ${moveContext.san} (${moveContext.color}, classified as ${moveContext.classification}. Eval after: ${(moveContext.evalAfter / 100).toFixed(1)}. Best move was ${moveContext.bestMove || "this"}.]
-
-User question: ${message}`;
+        fullUserMessage = `[Currently viewing Move ${moveContext.moveIndex}: ${
+          moveContext.san
+        } (${moveContext.color}, classified as ${moveContext.classification}. Eval after: ${
+          (moveContext.evalAfter / 100).toFixed(1)
+        }. Best move was ${moveContext.bestMove || "this"}.)] User question: ${message}`;
       }
 
       session.push({ role: "user", content: fullUserMessage });
 
       // Keep session manageable: system + last 10 exchanges max
       const trimmed =
-        session.length > 22
-          ? [session[0], ...session.slice(-20)]
-          : session;
+        session.length > 22 ? [session[0], ...session.slice(-20)] : session;
 
       const reply = await callOpenRouter(trimmed);
-
       session.push({ role: "assistant", content: reply });
 
       res.json({ reply });
