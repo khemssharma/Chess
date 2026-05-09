@@ -14,10 +14,17 @@ import { v4 as uuidv4 } from "uuid";
 export type Difficulty = "easy" | "medium" | "hard" | "expert";
 
 const DIFFICULTY_ELO: Record<Difficulty, number> = {
-  easy: 800,
-  medium: 1400,
-  hard: 2000,
+  easy: 1320,
+  medium: 1600,
+  hard: 2200,
   expert: 3000,
+};
+
+const DIFFICULTY_SKILL_LEVEL: Record<Difficulty, number> = {
+  easy: 0,
+  medium: 7,
+  hard: 14,
+  expert: 20,
 };
 
 const DIFFICULTY_DEPTH: Record<Difficulty, number> = {
@@ -115,6 +122,7 @@ export class StockfishGame {
         this.stockfish.stdout.setEncoding("utf8");
 
         this.stockfish.stdin.write("uci\n");
+        this.stockfish.stdin.write(`setoption name Skill Level value ${DIFFICULTY_SKILL_LEVEL[this.difficulty]}\n`);
         this.stockfish.stdin.write(`setoption name UCI_LimitStrength value true\n`);
         this.stockfish.stdin.write(`setoption name UCI_Elo value ${DIFFICULTY_ELO[this.difficulty]}\n`);
         this.stockfish.stdin.write("isready\n");
