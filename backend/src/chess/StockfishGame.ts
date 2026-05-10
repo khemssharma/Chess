@@ -1,6 +1,6 @@
 import { WebSocket } from "ws";
 import { Chess } from "chess.js";
-import { spawn, ChildProcessWithoutNullStreams } from "child_process";
+import { spawn, execFileSync, ChildProcessWithoutNullStreams } from "child_process";
 import path from "path";
 import {
   GAME_OVER,
@@ -15,77 +15,62 @@ import { v4 as uuidv4 } from "uuid";
 export type Difficulty = "easy" | "medium" | "hard" | "expert";
 
 /**
- * Lichess-style difficulty configuration.
- *
- * Lichess uses three levers together:
- *   1. UCI_Elo          - calibrated ELO target
- *   2. movetime (ms)    - maximum time the engine may think per move
- *   3. depth            - maximum search depth (hard cap)
- *
- * Using ONLY depth or ONLY ELO leaves strength poorly controlled:
- *   - Depth alone: engine still chooses the best move at that depth, so easy
- *     levels don't actually blunder on purpose.
- *   - ELO alone without a movetime cap: Stockfish still thinks indefinitely
- *     and plays surprisingly well at low ELO because UCI_Elo error injection
- *     needs enough candidate moves to choose from, which requires real search.
- *
- * The combination is what creates believable human-like play at every level.
- *
- * Stockfish ELO reference:
- *   min supported UCI_Elo = 1320 (Stockfish clamps below this internally)
- *   To go below ~1320 reliably we keep movetime very short (50-100 ms) so
- *   the engine barely searches, guaranteeing genuine blunders.
+ * Lichess-style difficulty: UCI_Elo + movetime + depth, all three together.
  */
 const DIFFICULTY_CONFIG: Record<
   Difficulty,
   { elo: number; movetime: number; depth: number; limitStrength: boolean }
 > = {
-  // ~800-1000 ELO: very short think time forces shallow search -> real blunders
-  easy: { elo: 1320, movetime: 50, depth: 1, limitStrength: true },
-  // ~1300-1500 ELO: Stockfish plays at its minimum rated strength with ~200 ms
-  medium: { elo: 1500, movetime: 200, depth: 5, limitStrength: true },
-  // ~1800-2000 ELO
-  hard: { elo: 2000, movetime: 1000, depth: 12, limitStrength: true },
-  // ~2500+ ELO: near full strength
+  easy:   { elo: 1320, movetime: 80,   depth: 1,  limitStrength: true  },
+  medium: { elo: 1500, movetime: 300,  depth: 5,  limitStrength: true  },
+  hard:   { elo: 2000, movetime: 1500, depth: 12, limitStrength: true  },
   expert: { elo: 2800, movetime: 3000, depth: 20, limitStrength: false },
 };
 
-// Artificial UI delay so moves don't appear instant (separate from think time)
+// Visual delay before showing the AI move (separate from thinking time)
 const DIFFICULTY_DELAY: Record<Difficulty, number> = {
-  easy: 400,
-  medium: 300,
-  hard: 150,
+  easy:   300,
+  medium: 200,
+  hard:   100,
   expert: 50,
 };
 
 /**
- * Resolve the Stockfish binary path.
- * Priority order:
- *   1. STOCKFISH_PATH env var (set in render.yaml pointing to downloaded binary)
- *   2. ./stockfish-bin  (downloaded by buildCommand in backend root dir)
- *   3. System PATH locations (for local dev where stockfish is installed)
+ * Validate and return the first working Stockfish binary path.
+ * Uses execFileSync with a simple 'uci' command to confirm the binary works.
  */
-function getStockfishCandidates(): string[] {
+function resolveStockfishBin(): string | null {
   const candidates: string[] = [];
 
-  // Env-var override (Render sets this via render.yaml)
   if (process.env.STOCKFISH_PATH) {
     candidates.push(process.env.STOCKFISH_PATH);
   }
-
-  // Binary downloaded by buildCommand into backend root dir.
-  // __dirname is dist/src/chess at runtime, so we go 3 levels up.
-  candidates.push(path.join(__dirname, "..", "..", "..", "stockfish-bin"));
-  // Also try relative to CWD (process.cwd() = backend/ on Render)
+  // Render deploys to /opt/render/project/src (rootDir = backend)
+  candidates.push("/opt/render/project/src/stockfish-bin");
   candidates.push(path.join(process.cwd(), "stockfish-bin"));
-
-  // System-installed fallbacks (local dev / apt)
+  candidates.push(path.join(__dirname, "..", "..", "..", "stockfish-bin"));
   candidates.push("stockfish");
   candidates.push("/usr/games/stockfish");
   candidates.push("/usr/bin/stockfish");
   candidates.push("/usr/local/bin/stockfish");
 
-  return candidates;
+  for (const bin of candidates) {
+    try {
+      // Quick validation: run 'uci' and check for 'uciok' in output
+      const out = execFileSync(bin, [], {
+        input: "uci\nquit\n",
+        timeout: 3000,
+        encoding: "utf8",
+      }) as string;
+      if (out.includes("uciok")) {
+        console.log(`Stockfish binary validated: ${bin}`);
+        return bin;
+      }
+    } catch {
+      // Binary not found or timed out — try next
+    }
+  }
+  return null;
 }
 
 export class StockfishGame {
@@ -96,6 +81,8 @@ export class StockfishGame {
   private playerColor: "white" | "black";
   private difficulty: Difficulty;
   private stockfish: ChildProcessWithoutNullStreams | null = null;
+  private stockfishReady = false;
+  private pendingBuffer = "";
   private moveCount = 0;
   private dbUserId: number | null;
 
@@ -148,61 +135,69 @@ export class StockfishGame {
       this.startTimeTracking();
     }
 
-    // If AI plays white, make first move
+    // If AI plays white, make first move after engine is ready
     if (playerColor === "black") {
-      setTimeout(() => this.requestStockfishMove(), 500);
+      setTimeout(() => this.requestStockfishMove(), 800);
     }
   }
 
   private initStockfish() {
-    const candidates = getStockfishCandidates();
+    const bin = resolveStockfishBin();
+    if (!bin) {
+      console.warn("No valid Stockfish binary found — using random-move fallback");
+      return;
+    }
 
-    for (const bin of candidates) {
-      try {
-        const proc = spawn(bin, [], { stdio: ["pipe", "pipe", "pipe"] });
+    try {
+      this.stockfish = spawn(bin, [], { stdio: ["pipe", "pipe", "pipe"] });
+    } catch (err) {
+      console.error("Failed to spawn Stockfish:", err);
+      return;
+    }
 
-        // Test if the process starts without error
-        let started = false;
-        proc.on("error", () => {
-          // This candidate failed — try next
-        });
-        proc.stdout.setEncoding("utf8");
+    const cfg = DIFFICULTY_CONFIG[this.difficulty];
+    this.stockfish.stdout.setEncoding("utf8");
 
-        // If we get any stdout, the process started successfully
-        const cfg = DIFFICULTY_CONFIG[this.difficulty];
-
-        proc.stdin.write("uci\n");
-        proc.stdin.write("setoption name Threads value 1\n");
-        proc.stdin.write("setoption name Hash value 16\n");
-        proc.stdin.write("setoption name MultiPV value 1\n");
-
-        if (cfg.limitStrength) {
-          proc.stdin.write(`setoption name UCI_LimitStrength value true\n`);
-          proc.stdin.write(`setoption name UCI_Elo value ${cfg.elo}\n`);
-        } else {
-          proc.stdin.write(`setoption name UCI_LimitStrength value false\n`);
-        }
-
-        proc.stdin.write("ucinewgame\n");
-        proc.stdin.write("isready\n");
-
-        this.stockfish = proc;
-        console.log(
-          `Stockfish started: ${bin} | difficulty: ${this.difficulty} | elo: ${cfg.elo} | movetime: ${cfg.movetime}ms | depth: ${cfg.depth}`
-        );
-        break;
-      } catch {
-        // Binary not found or failed to spawn — try next candidate
-        console.warn(`Stockfish candidate failed: ${bin}`);
+    // Accumulate stdout into pendingBuffer for the bestmove listener
+    this.stockfish.stdout.on("data", (chunk: string) => {
+      this.pendingBuffer += chunk;
+      // Mark engine as ready once we see 'readyok'
+      if (!this.stockfishReady && this.pendingBuffer.includes("readyok")) {
+        this.stockfishReady = true;
+        this.pendingBuffer = "";
+        console.log(`Stockfish ready: ${bin} | difficulty: ${this.difficulty} | elo: ${cfg.elo} | movetime: ${cfg.movetime}ms | depth: ${cfg.depth}`);
       }
+    });
+
+    this.stockfish.on("error", (err) => {
+      console.error("Stockfish process error:", err.message);
+      this.stockfish = null;
+      this.stockfishReady = false;
+    });
+
+    this.stockfish.on("exit", (code) => {
+      if (code !== 0) {
+        console.warn(`Stockfish exited with code ${code}`);
+      }
+      this.stockfish = null;
+      this.stockfishReady = false;
+    });
+
+    // Send UCI init sequence
+    this.stockfish.stdin.write("uci\n");
+    this.stockfish.stdin.write("setoption name Threads value 1\n");
+    this.stockfish.stdin.write("setoption name Hash value 16\n");
+    this.stockfish.stdin.write("setoption name MultiPV value 1\n");
+
+    if (cfg.limitStrength) {
+      this.stockfish.stdin.write("setoption name UCI_LimitStrength value true\n");
+      this.stockfish.stdin.write(`setoption name UCI_Elo value ${cfg.elo}\n`);
+    } else {
+      this.stockfish.stdin.write("setoption name UCI_LimitStrength value false\n");
     }
 
-    if (!this.stockfish) {
-      console.warn(
-        "Stockfish not found in any candidate path — using random-move fallback.\n" +
-        `Tried: ${getStockfishCandidates().join(", ")}`
-      );
-    }
+    this.stockfish.stdin.write("ucinewgame\n");
+    this.stockfish.stdin.write("isready\n"); // engine will reply 'readyok' when done
   }
 
   private requestStockfishMove() {
@@ -212,48 +207,92 @@ export class StockfishGame {
     const cfg = DIFFICULTY_CONFIG[this.difficulty];
     const delay = DIFFICULTY_DELAY[this.difficulty];
 
-    if (this.stockfish) {
+    if (!this.stockfish) {
+      this.fallbackRandomMove(delay);
+      return;
+    }
+
+    // If engine not yet ready, wait up to 3 s then proceed anyway
+    const runSearch = () => {
+      if (!this.stockfish) {
+        this.fallbackRandomMove(delay);
+        return;
+      }
+
       let responded = false;
-      const onData = (data: string) => {
-        const lines = data.split("\n");
+
+      // Timeout: if Stockfish doesn't respond in movetime + 2s, fall back
+      const timeoutId = setTimeout(() => {
+        if (!responded) {
+          responded = true;
+          this.stockfish?.stdout.off("data", onData);
+          console.warn(`Stockfish timeout after ${cfg.movetime + 2000}ms — using random move fallback`);
+          this.fallbackRandomMove(0);
+        }
+      }, cfg.movetime + 2000);
+
+      const onData = (chunk: string) => {
+        this.pendingBuffer += chunk;
+        const lines = this.pendingBuffer.split("\n");
+        // Keep the last partial line in the buffer
+        this.pendingBuffer = lines.pop() ?? "";
+
         for (const line of lines) {
           if (line.startsWith("bestmove") && !responded) {
             responded = true;
-            this.stockfish!.stdout.off("data", onData);
+            clearTimeout(timeoutId);
+            this.stockfish?.stdout.off("data", onData);
+
             const parts = line.trim().split(" ");
             const moveStr = parts[1];
+            console.log(`Stockfish bestmove: ${moveStr} (difficulty: ${this.difficulty})`);
+
             if (moveStr && moveStr !== "(none)") {
               setTimeout(() => {
                 this.applyAiMove({
                   from: moveStr.slice(0, 2),
                   to: moveStr.slice(2, 4),
-                  promotion:
-                    moveStr.length > 4 ? moveStr[4] : undefined,
+                  promotion: moveStr.length > 4 ? moveStr[4] : undefined,
                 });
               }, delay);
+            } else {
+              this.fallbackRandomMove(delay);
             }
           }
         }
       };
 
+      this.pendingBuffer = ""; // clear buffer before search
       this.stockfish.stdout.on("data", onData);
-      // Set the position fresh each move
       this.stockfish.stdin.write(`position fen ${fen}\n`);
-      // Use BOTH movetime AND depth caps, just like Lichess.
-      // Stockfish will stop at whichever limit is hit first.
-      this.stockfish.stdin.write(
-        `go movetime ${cfg.movetime} depth ${cfg.depth}\n`
-      );
+      this.stockfish.stdin.write(`go movetime ${cfg.movetime} depth ${cfg.depth}\n`);
+    };
+
+    if (this.stockfishReady) {
+      runSearch();
     } else {
-      // Fallback: random legal move
-      setTimeout(() => {
-        const moves = this.board.moves({ verbose: true });
-        if (moves.length > 0) {
-          const m = moves[Math.floor(Math.random() * moves.length)];
-          this.applyAiMove({ from: m.from, to: m.to, promotion: (m as any).promotion });
+      // Wait for readyok, up to 3 seconds
+      let waited = 0;
+      const interval = setInterval(() => {
+        waited += 100;
+        if (this.stockfishReady || waited >= 3000) {
+          clearInterval(interval);
+          runSearch();
         }
-      }, delay);
+      }, 100);
     }
+  }
+
+  private fallbackRandomMove(delay: number) {
+    setTimeout(() => {
+      if (this.board.isGameOver()) return;
+      const moves = this.board.moves({ verbose: true });
+      if (moves.length > 0) {
+        const m = moves[Math.floor(Math.random() * moves.length)];
+        console.warn(`Random fallback move: ${m.from}${m.to}`);
+        this.applyAiMove({ from: m.from, to: m.to, promotion: (m as any).promotion });
+      }
+    }, delay);
   }
 
   private applyAiMove(move: { from: string; to: string; promotion?: string }) {
@@ -370,7 +409,7 @@ export class StockfishGame {
     winner: string | null,
     reason: string
   ): Promise<void> {
-    if (this.dbUserId === null) return; // guest — don't save
+    if (this.dbUserId === null) return;
     const whiteUserId = this.playerColor === "white" ? this.dbUserId : null;
     const blackUserId = this.playerColor === "black" ? this.dbUserId : null;
     try {
@@ -460,5 +499,6 @@ export class StockfishGame {
       } catch {}
       this.stockfish = null;
     }
+    this.stockfishReady = false;
   }
 }
