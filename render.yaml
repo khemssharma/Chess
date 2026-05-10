@@ -5,13 +5,22 @@ services:
     region: oregon
     branch: main
     rootDir: backend
-    buildCommand: apt-get update && apt-get install -y stockfish && npm install && npm run build
+    buildCommand: >-
+      curl -L https://github.com/official-stockfish/Stockfish/releases/download/sf_17/stockfish-ubuntu-x86-64-avx2.tar
+      -o /tmp/sf.tar &&
+      tar -xf /tmp/sf.tar -C /tmp &&
+      cp /tmp/stockfish/stockfish-ubuntu-x86-64-avx2 ./stockfish-bin &&
+      chmod +x ./stockfish-bin &&
+      npm install &&
+      npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
       - key: CLIENT_URL
         value: https://chess-app-jii7.onrender.com
+      - key: STOCKFISH_PATH
+        value: ./stockfish-bin
 
   - type: web
     name: chess-frontend
@@ -19,7 +28,7 @@ services:
     region: oregon
     branch: main
     rootDir: frontend
-    buildCommand: npm install && curl -L https://github.com/official-stockfish/Stockfish/releases/download/sf_17/stockfish-ubuntu-x86-64-avx2.tar -o /tmp/sf.tar && tar -xf /tmp/sf.tar -C /tmp && cp /tmp/stockfish/stockfish-ubuntu-x86-64-avx2 ./stockfish-bin && chmod +x ./stockfish-bin && npx tsc
+    buildCommand: npm install && npx tsc
     staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
