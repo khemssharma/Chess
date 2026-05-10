@@ -13,32 +13,48 @@ import { v4 as uuidv4 } from "uuid";
 
 export type Difficulty = "easy" | "medium" | "hard" | "expert";
 
-const DIFFICULTY_ELO: Record<Difficulty, number> = {
-  easy: 1320,
-  medium: 1600,
-  hard: 2200,
-  expert: 3000,
+/**
+ * Lichess-style difficulty configuration.
+ *
+ * Lichess uses three levers together:
+ *   1. UCI_Elo          - calibrated ELO target
+ *   2. movetime (ms)    - maximum time the engine may think per move
+ *   3. depth            - maximum search depth (hard cap)
+ *
+ * Using ONLY depth or ONLY ELO leaves strength poorly controlled:
+ *   - Depth alone: engine still chooses the best move at that depth, so easy
+ *     levels don’t actually blunder on purpose.
+ *   - ELO alone without a movetime cap: Stockfish still thinks indefinitely
+ *     and plays surprisingly well at low ELO because UCI_Elo error injection
+ *     needs enough candidate moves to choose from, which requires real search.
+ *
+ * The combination is what creates believable human-like play at every level.
+ *
+ * Stockfish ELO reference:
+ *   min supported UCI_Elo = 1320 (Stockfish clamps below this internally)
+ *   To go below ~1320 reliably we keep movetime very short (50-100 ms) so
+ *   the engine barely searches, guaranteeing genuine blunders.
+ */
+const DIFFICULTY_CONFIG: Record<
+  Difficulty,
+  { elo: number; movetime: number; depth: number; limitStrength: boolean }
+> = {
+  // ~800-1000 ELO: very short think time forces shallow search -> real blunders
+  easy: { elo: 1320, movetime: 50, depth: 1, limitStrength: true },
+  // ~1300-1500 ELO: Stockfish plays at its minimum rated strength with ~200 ms
+  medium: { elo: 1500, movetime: 200, depth: 5, limitStrength: true },
+  // ~1800-2000 ELO
+  hard: { elo: 2000, movetime: 1000, depth: 12, limitStrength: true },
+  // ~2500+ ELO: near full strength
+  expert: { elo: 2800, movetime: 3000, depth: 20, limitStrength: false },
 };
 
-const DIFFICULTY_SKILL_LEVEL: Record<Difficulty, number> = {
-  easy: 0,
-  medium: 7,
-  hard: 14,
-  expert: 20,
-};
-
-const DIFFICULTY_DEPTH: Record<Difficulty, number> = {
-  easy: 1,
-  medium: 5,
-  hard: 12,
-  expert: 20,
-};
-
+// Artificial UI delay so moves don’t appear instant (separate from think time)
 const DIFFICULTY_DELAY: Record<Difficulty, number> = {
-  easy: 1000,
-  medium: 600,
-  hard: 300,
-  expert: 100,
+  easy: 400,
+  medium: 300,
+  hard: 150,
+  expert: 50,
 };
 
 export class StockfishGame {
@@ -75,8 +91,8 @@ export class StockfishGame {
     this.playerColor = playerColor;
     this.difficulty = difficulty;
     this.dbUserId = dbUserId;
-
-    this.timeControl = timeControlMinutes !== null ? timeControlMinutes * 60 * 1000 : null;
+    this.timeControl =
+      timeControlMinutes !== null ? timeControlMinutes * 60 * 1000 : null;
     this.playerTime = this.timeControl;
     this.aiTime = this.timeControl;
 
@@ -118,16 +134,39 @@ export class StockfishGame {
     for (const bin of candidates) {
       try {
         this.stockfish = spawn(bin, [], { stdio: ["pipe", "pipe", "pipe"] });
-        this.stockfish.on("error", () => { this.stockfish = null; });
+        this.stockfish.on("error", () => {
+          this.stockfish = null;
+        });
         this.stockfish.stdout.setEncoding("utf8");
 
+        const cfg = DIFFICULTY_CONFIG[this.difficulty];
+
+        // Send UCI init sequence - Lichess order matters
         this.stockfish.stdin.write("uci\n");
-        this.stockfish.stdin.write(`setoption name Skill Level value ${DIFFICULTY_SKILL_LEVEL[this.difficulty]}\n`);
-        this.stockfish.stdin.write(`setoption name UCI_LimitStrength value true\n`);
-        this.stockfish.stdin.write(`setoption name UCI_Elo value ${DIFFICULTY_ELO[this.difficulty]}\n`);
+        this.stockfish.stdin.write("setoption name Threads value 1\n");
+        this.stockfish.stdin.write("setoption name Hash value 16\n");
+        this.stockfish.stdin.write("setoption name MultiPV value 1\n");
+
+        if (cfg.limitStrength) {
+          // Enable ELO limiting - this is Stockfish's built-in strength reduction
+          // It internally uses error injection based on the ELO target
+          this.stockfish.stdin.write(
+            `setoption name UCI_LimitStrength value true\n`
+          );
+          this.stockfish.stdin.write(
+            `setoption name UCI_Elo value ${cfg.elo}\n`
+          );
+        } else {
+          // Expert: full strength, no limiter
+          this.stockfish.stdin.write(
+            `setoption name UCI_LimitStrength value false\n`
+          );
+        }
+
+        this.stockfish.stdin.write("ucinewgame\n");
         this.stockfish.stdin.write("isready\n");
 
-        console.log(`Stockfish started: ${bin}`);
+        console.log(`Stockfish started: ${bin} | difficulty: ${this.difficulty} | elo: ${cfg.elo} | movetime: ${cfg.movetime}ms | depth: ${cfg.depth}`);
         break;
       } catch {
         this.stockfish = null;
@@ -143,12 +182,11 @@ export class StockfishGame {
     if (this.board.isGameOver()) return;
 
     const fen = this.board.fen();
-    const depth = DIFFICULTY_DEPTH[this.difficulty];
+    const cfg = DIFFICULTY_CONFIG[this.difficulty];
     const delay = DIFFICULTY_DELAY[this.difficulty];
 
     if (this.stockfish) {
       let responded = false;
-
       const onData = (data: string) => {
         const lines = data.split("\n");
         for (const line of lines) {
@@ -162,7 +200,8 @@ export class StockfishGame {
                 this.applyAiMove({
                   from: moveStr.slice(0, 2),
                   to: moveStr.slice(2, 4),
-                  promotion: moveStr.length > 4 ? moveStr[4] : undefined,
+                  promotion:
+                    moveStr.length > 4 ? moveStr[4] : undefined,
                 });
               }, delay);
             }
@@ -171,8 +210,13 @@ export class StockfishGame {
       };
 
       this.stockfish.stdout.on("data", onData);
+      // Set the position fresh each move
       this.stockfish.stdin.write(`position fen ${fen}\n`);
-      this.stockfish.stdin.write(`go depth ${depth}\n`);
+      // Use BOTH movetime AND depth caps, just like Lichess.
+      // Stockfish will stop at whichever limit is hit first.
+      this.stockfish.stdin.write(
+        `go movetime ${cfg.movetime} depth ${cfg.depth}\n`
+      );
     } else {
       // Fallback: random legal move
       setTimeout(() => {
@@ -187,60 +231,49 @@ export class StockfishGame {
 
   private applyAiMove(move: { from: string; to: string; promotion?: string }) {
     if (this.board.isGameOver()) return;
-
     try {
       this.board.move(move);
     } catch {
       return;
     }
-
     if (this.timeControl !== null) {
       this.lastMoveTime = Date.now();
     }
-
     this.moveCount++;
-
     this.player.send(JSON.stringify({ type: MOVE, payload: move }));
-
     if (this.timeControl !== null) {
       this.sendTimeUpdate();
     }
-
     if (this.board.isGameOver()) {
       this.handleGameOver();
     }
   }
 
-  makeMove(socket: WebSocket, move: { from: string; to: string; promotion?: string }) {
+  makeMove(
+    socket: WebSocket,
+    move: { from: string; to: string; promotion?: string }
+  ) {
     if (socket !== this.player) return;
-
     const isPlayerTurn =
       (this.playerColor === "white" && this.board.turn() === "w") ||
       (this.playerColor === "black" && this.board.turn() === "b");
-
     if (!isPlayerTurn) return;
-
     try {
       this.board.move(move);
     } catch {
       return;
     }
-
     if (this.timeControl !== null) {
       this.lastMoveTime = Date.now();
     }
-
     this.moveCount++;
-
     if (this.board.isGameOver()) {
       this.handleGameOver();
       return;
     }
-
     if (this.timeControl !== null) {
       this.sendTimeUpdate();
     }
-
     this.requestStockfishMove();
   }
 
@@ -248,12 +281,12 @@ export class StockfishGame {
     const isPlayerTurn =
       (this.playerColor === "white" && this.board.turn() === "w") ||
       (this.playerColor === "black" && this.board.turn() === "b");
-
     if (!isPlayerTurn) {
-      socket.send(JSON.stringify({ type: VALID_MOVES, payload: { square, moves: [] } }));
+      socket.send(
+        JSON.stringify({ type: VALID_MOVES, payload: { square, moves: [] } })
+      );
       return;
     }
-
     const moves = this.board.moves({ square: square as any, verbose: true });
     socket.send(
       JSON.stringify({
@@ -275,37 +308,44 @@ export class StockfishGame {
       clearInterval(this.timeUpdateInterval);
       this.timeUpdateInterval = null;
     }
-
     let finalWinner = winner ?? null;
     let finalReason = reason ?? "checkmate";
-
     if (!reason) {
       const turnWinner = this.board.turn() === "w" ? "black" : "white";
-      if (this.board.isDraw()) { finalReason = "draw"; finalWinner = null; }
-      else if (this.board.isStalemate()) { finalReason = "stalemate"; finalWinner = null; }
-      else if (this.board.isThreefoldRepetition()) { finalReason = "repetition"; finalWinner = null; }
-      else if (this.board.isInsufficientMaterial()) { finalReason = "insufficient material"; finalWinner = null; }
-      else { finalWinner = turnWinner; }
+      if (this.board.isDraw()) {
+        finalReason = "draw";
+        finalWinner = null;
+      } else if (this.board.isStalemate()) {
+        finalReason = "stalemate";
+        finalWinner = null;
+      } else if (this.board.isThreefoldRepetition()) {
+        finalReason = "repetition";
+        finalWinner = null;
+      } else if (this.board.isInsufficientMaterial()) {
+        finalReason = "insufficient material";
+        finalWinner = null;
+      } else {
+        finalWinner = turnWinner;
+      }
     }
-
     this.player.send(
       JSON.stringify({
         type: GAME_OVER,
         payload: { winner: finalWinner, reason: finalReason },
       })
     );
-
     this.persistGameResult(finalWinner, finalReason);
     this.cleanup();
     if (this.onGameEnd) this.onGameEnd(this.gameId);
   }
 
-  private async persistGameResult(winner: string | null, reason: string): Promise<void> {
+  private async persistGameResult(
+    winner: string | null,
+    reason: string
+  ): Promise<void> {
     if (this.dbUserId === null) return; // guest — don't save
-
     const whiteUserId = this.playerColor === "white" ? this.dbUserId : null;
     const blackUserId = this.playerColor === "black" ? this.dbUserId : null;
-
     try {
       await gameHistoryService.saveGameResult({
         gameId: this.gameId,
@@ -331,23 +371,18 @@ export class StockfishGame {
 
   private startTimeTracking() {
     if (this.timeControl === null) return;
-
     this.timeUpdateInterval = setInterval(() => {
       const now = Date.now();
       const elapsed = now - this.lastMoveTime;
-
       const isPlayerTurn =
         (this.playerColor === "white" && this.board.turn() === "w") ||
         (this.playerColor === "black" && this.board.turn() === "b");
-
       if (isPlayerTurn && this.playerTime !== null) {
         this.playerTime -= elapsed;
       } else if (!isPlayerTurn && this.aiTime !== null) {
         this.aiTime -= elapsed;
       }
-
       this.lastMoveTime = now;
-
       if (this.playerTime !== null && this.playerTime <= 0) {
         this.endGameByTimeout("computer");
         return;
@@ -356,17 +391,16 @@ export class StockfishGame {
         this.endGameByTimeout(this.playerColor);
         return;
       }
-
       this.sendTimeUpdate();
     }, 100);
   }
 
   private sendTimeUpdate() {
     if (this.playerTime === null || this.aiTime === null) return;
-
-    const whiteTime = this.playerColor === "white" ? this.playerTime : this.aiTime;
-    const blackTime = this.playerColor === "black" ? this.playerTime : this.aiTime;
-
+    const whiteTime =
+      this.playerColor === "white" ? this.playerTime : this.aiTime;
+    const blackTime =
+      this.playerColor === "black" ? this.playerTime : this.aiTime;
     this.player.send(
       JSON.stringify({
         type: TIME_UPDATE,
@@ -393,6 +427,7 @@ export class StockfishGame {
     }
     if (this.stockfish) {
       try {
+        this.stockfish.stdin.write("stop\n");
         this.stockfish.stdin.write("quit\n");
         this.stockfish.kill();
       } catch {}
