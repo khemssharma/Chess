@@ -1,6 +1,7 @@
 import { WebSocket } from "ws";
 import { Chess } from "chess.js";
 import { spawn, ChildProcessWithoutNullStreams } from "child_process";
+import path from "path";
 import {
   GAME_OVER,
   INIT_GAME,
@@ -23,7 +24,7 @@ export type Difficulty = "easy" | "medium" | "hard" | "expert";
  *
  * Using ONLY depth or ONLY ELO leaves strength poorly controlled:
  *   - Depth alone: engine still chooses the best move at that depth, so easy
- *     levels don’t actually blunder on purpose.
+ *     levels don't actually blunder on purpose.
  *   - ELO alone without a movetime cap: Stockfish still thinks indefinitely
  *     and plays surprisingly well at low ELO because UCI_Elo error injection
  *     needs enough candidate moves to choose from, which requires real search.
@@ -49,13 +50,43 @@ const DIFFICULTY_CONFIG: Record<
   expert: { elo: 2800, movetime: 3000, depth: 20, limitStrength: false },
 };
 
-// Artificial UI delay so moves don’t appear instant (separate from think time)
+// Artificial UI delay so moves don't appear instant (separate from think time)
 const DIFFICULTY_DELAY: Record<Difficulty, number> = {
   easy: 400,
   medium: 300,
   hard: 150,
   expert: 50,
 };
+
+/**
+ * Resolve the Stockfish binary path.
+ * Priority order:
+ *   1. STOCKFISH_PATH env var (set in render.yaml pointing to downloaded binary)
+ *   2. ./stockfish-bin  (downloaded by buildCommand in backend root dir)
+ *   3. System PATH locations (for local dev where stockfish is installed)
+ */
+function getStockfishCandidates(): string[] {
+  const candidates: string[] = [];
+
+  // Env-var override (Render sets this via render.yaml)
+  if (process.env.STOCKFISH_PATH) {
+    candidates.push(process.env.STOCKFISH_PATH);
+  }
+
+  // Binary downloaded by buildCommand into backend root dir.
+  // __dirname is dist/src/chess at runtime, so we go 3 levels up.
+  candidates.push(path.join(__dirname, "..", "..", "..", "stockfish-bin"));
+  // Also try relative to CWD (process.cwd() = backend/ on Render)
+  candidates.push(path.join(process.cwd(), "stockfish-bin"));
+
+  // System-installed fallbacks (local dev / apt)
+  candidates.push("stockfish");
+  candidates.push("/usr/games/stockfish");
+  candidates.push("/usr/bin/stockfish");
+  candidates.push("/usr/local/bin/stockfish");
+
+  return candidates;
+}
 
 export class StockfishGame {
   public player: WebSocket;
@@ -124,57 +155,53 @@ export class StockfishGame {
   }
 
   private initStockfish() {
-    const candidates = [
-      "stockfish",
-      "/usr/games/stockfish",
-      "/usr/bin/stockfish",
-      "/usr/local/bin/stockfish",
-    ];
+    const candidates = getStockfishCandidates();
 
     for (const bin of candidates) {
       try {
-        this.stockfish = spawn(bin, [], { stdio: ["pipe", "pipe", "pipe"] });
-        this.stockfish.on("error", () => {
-          this.stockfish = null;
-        });
-        this.stockfish.stdout.setEncoding("utf8");
+        const proc = spawn(bin, [], { stdio: ["pipe", "pipe", "pipe"] });
 
+        // Test if the process starts without error
+        let started = false;
+        proc.on("error", () => {
+          // This candidate failed — try next
+        });
+        proc.stdout.setEncoding("utf8");
+
+        // If we get any stdout, the process started successfully
         const cfg = DIFFICULTY_CONFIG[this.difficulty];
 
-        // Send UCI init sequence - Lichess order matters
-        this.stockfish.stdin.write("uci\n");
-        this.stockfish.stdin.write("setoption name Threads value 1\n");
-        this.stockfish.stdin.write("setoption name Hash value 16\n");
-        this.stockfish.stdin.write("setoption name MultiPV value 1\n");
+        proc.stdin.write("uci\n");
+        proc.stdin.write("setoption name Threads value 1\n");
+        proc.stdin.write("setoption name Hash value 16\n");
+        proc.stdin.write("setoption name MultiPV value 1\n");
 
         if (cfg.limitStrength) {
-          // Enable ELO limiting - this is Stockfish's built-in strength reduction
-          // It internally uses error injection based on the ELO target
-          this.stockfish.stdin.write(
-            `setoption name UCI_LimitStrength value true\n`
-          );
-          this.stockfish.stdin.write(
-            `setoption name UCI_Elo value ${cfg.elo}\n`
-          );
+          proc.stdin.write(`setoption name UCI_LimitStrength value true\n`);
+          proc.stdin.write(`setoption name UCI_Elo value ${cfg.elo}\n`);
         } else {
-          // Expert: full strength, no limiter
-          this.stockfish.stdin.write(
-            `setoption name UCI_LimitStrength value false\n`
-          );
+          proc.stdin.write(`setoption name UCI_LimitStrength value false\n`);
         }
 
-        this.stockfish.stdin.write("ucinewgame\n");
-        this.stockfish.stdin.write("isready\n");
+        proc.stdin.write("ucinewgame\n");
+        proc.stdin.write("isready\n");
 
-        console.log(`Stockfish started: ${bin} | difficulty: ${this.difficulty} | elo: ${cfg.elo} | movetime: ${cfg.movetime}ms | depth: ${cfg.depth}`);
+        this.stockfish = proc;
+        console.log(
+          `Stockfish started: ${bin} | difficulty: ${this.difficulty} | elo: ${cfg.elo} | movetime: ${cfg.movetime}ms | depth: ${cfg.depth}`
+        );
         break;
       } catch {
-        this.stockfish = null;
+        // Binary not found or failed to spawn — try next candidate
+        console.warn(`Stockfish candidate failed: ${bin}`);
       }
     }
 
     if (!this.stockfish) {
-      console.warn("Stockfish not found — using random-move fallback");
+      console.warn(
+        "Stockfish not found in any candidate path — using random-move fallback.\n" +
+        `Tried: ${getStockfishCandidates().join(", ")}`
+      );
     }
   }
 
