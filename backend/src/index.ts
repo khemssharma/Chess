@@ -7,7 +7,6 @@ import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
 import path from "path";
-import { fileURLToPath } from "url";
 
 import AuthRouter from "./routes/authRoutes";
 import { GameManager } from "./chess/GameManager";
@@ -44,12 +43,11 @@ app.use("/api", AuthRouter);
 
 // ---------------------------------------------------------------------------
 // Static frontend serving
-// The frontend is built into ../frontend/dist (relative to backend root).
-// __dirname resolves to backend/src at runtime, so we go up two levels.
+// tsconfig uses "module": "commonjs" so __dirname is available natively.
+// At runtime the compiled file lives at backend/dist/src/index.js, so
+// we resolve ../../../frontend/dist to reach the Vite build output.
 // ---------------------------------------------------------------------------
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const frontendDist = path.resolve(__dirname, "../../frontend/dist");
+const frontendDist = path.resolve(__dirname, "../../../frontend/dist");
 
 app.use(express.static(frontendDist));
 
