@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
-const API_URL = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+const API_URL = "";
 
 // ── Icons ──────────────────────────────────────────────────────────────────
 const SendIcon = () => (

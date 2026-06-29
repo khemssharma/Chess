@@ -1,81 +1,61 @@
-# Deploying to Render
+# Deploying Chess App on Render (Single Server)
 
-## Overview
-This project deploys as two Render services:
-- **chess-backend** — Node.js Web Service (WebSocket + REST API)
-- **chess-frontend** — Static Site (React/Vite)
+This app runs as a **single service** — the Express backend serves the React
+frontend build and handles API + WebSocket requests, all on one port.
 
-The `render.yaml` at the repo root defines both. Render will auto-detect it when you connect your GitHub repo.
-
----
-
-## 1. Push your repo to GitHub
-Make sure your repo contains both `backend/` and `frontend/` directories, plus `render.yaml`.
-
----
-
-## 2. Connect to Render
-1. Go to [render.com](https://render.com) → **New** → **Blueprint**
-2. Connect your GitHub repo
-3. Render will read `render.yaml` and create both services automatically
-
----
-
-## 3. Backend environment variables
-Set these in the Render dashboard under **chess-backend → Environment**:
-
-| Key | Value |
-|-----|-------|
-| `DATABASE_URL` | Your PostgreSQL connection string |
-| `REDIS_URL` | Your Redis connection string |
-| `JWT_SECRET` | A long random secret string |
-| `NODE_ENV` | `production` |
-
-Render offers managed **PostgreSQL** and **Redis** add-ons — create them from the dashboard and copy the connection URLs.
-
----
-
-## 4. Frontend environment variable
-Set this under **chess-frontend → Environment**:
-
-| Key | Value |
-|-----|-------|
-| `VITE_WS_URL` | `wss://chess-backend.onrender.com` |
-
-Replace `chess-backend` with the actual subdomain Render assigns to your backend service.
-
----
-
-## 5. Stockfish on Render
-Stockfish is installed automatically during the backend build step:
+## How it works
 
 ```
-apt-get update && apt-get install -y stockfish && npm install && npm run build
+Root package.json
+├── npm run build
+│   ├── npm install --prefix backend
+│   ├── npm install --prefix frontend
+│   ├── npm run build --prefix frontend   → frontend/dist/
+│   └── npm run build --prefix backend    → backend/dist/
+└── npm start
+    └── npm run start --prefix backend    → node dist/src/index.js
+        ├── Serves frontend/dist/ as static files
+        ├── REST API at /api/*
+        └── WebSocket on the same port
 ```
 
-This is already set in `render.yaml` — no extra action needed. Render's Node.js web service environment runs on Debian/Ubuntu, so `apt-get` works out of the box.
+## Render Setup
 
-If the build ever fails with a Stockfish error, you can verify availability by checking the build logs for `stockfish` installation output.
+1. Create a **Web Service** on Render (not a Static Site).
+2. Connect your GitHub repo.
+3. Settings:
+   - **Build Command:** `npm run build`
+   - **Start Command:** `npm start`
+   - **Root Directory:** *(leave blank — uses repo root)*
+4. Environment variables:
+   - `DATABASE_URL` — your PostgreSQL connection string
+   - `JWT_SECRET` — a secure random string
+   - `NODE_ENV` — `production`
+   - `PORT` — Render sets this automatically
+   - `STOCKFISH_PATH` — `./stockfish-bin` (if using Stockfish)
+   - `REDIS_URL` — *(optional)* Redis connection string
+   - `VITE_GOOGLE_CLIENT_ID` — *(optional)* for Google OAuth
 
----
+> **Note:** `CLIENT_URL`, `VITE_API_URL`, and `VITE_WS_URL` are **no longer
+> needed** — everything runs on the same origin.
 
-## 6. Deploy order
-Deploy the **backend first**, wait for it to be live, then deploy the **frontend** — so you have the real backend URL to set in `VITE_WS_URL`.
+## Local Development
 
----
+```bash
+# Terminal 1 — backend (port 3000)
+cd backend
+npm install
+npm run dev
 
-## 7. Troubleshooting
+# Terminal 2 — frontend (port 5173, proxies to backend)
+cd frontend
+npm install
+npm run dev
+```
 
-**WebSocket won't connect**
-- Confirm `VITE_WS_URL` uses `wss://` (not `ws://`) — Render always terminates TLS.
-- Make sure the backend URL matches exactly what Render shows (e.g. `chess-backend.onrender.com`).
+Or build and run as a single server locally:
 
-**Stockfish not working / fallback to random moves**
-- Check the backend build logs for `apt-get install -y stockfish` — it should show a successful install.
-- Render's free tier may time out during heavy builds; retry the deploy if needed.
-
-**Database errors on startup**
-- Run `npm run db:migrate` locally against your production `DATABASE_URL`, or trigger it in a Render shell (dashboard → shell tab).
-
-**Cold start delays**
-- Free-tier Render services spin down after inactivity. The first WebSocket connection after sleep will take ~30 seconds. Upgrade to a paid instance to avoid this.
+```bash
+npm run build
+npm start        # → http://localhost:3000
+```
