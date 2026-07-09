@@ -18,6 +18,18 @@ model User {
   updatedAt     DateTime @updatedAt
   gamesAsWhite  Game[]   @relation("WhitePlayer")
   gamesAsBlack  Game[]   @relation("BlackPlayer")
+
+  // Glicko-2 game rating
+  rating          Float @default(1500)
+  ratingDeviation Float @default(350)
+  volatility      Float @default(0.06)
+
+  // Glicko-2 puzzle rating (tracked separately, like lichess)
+  puzzleRating          Float @default(1500)
+  puzzleRatingDeviation Float @default(350)
+  puzzleVolatility      Float @default(0.06)
+
+  puzzleAttempts PuzzleAttempt[]
 }
 
 // Stores a completed (or abandoned) chess game
@@ -47,4 +59,44 @@ model Game {
   reason     String?   // "checkmate" | "timeout" | "draw" | etc.
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
+
+  // Glicko-2 rating snapshots (only set for rated PvP games)
+  rated             Boolean @default(false)
+  whiteRatingBefore Float?
+  whiteRatingAfter  Float?
+  blackRatingBefore Float?
+  blackRatingAfter  Float?
+}
+
+// A tactics puzzle. Its rating moves via Glicko-2 as players attempt it,
+// so difficulty self-calibrates over time (lichess model).
+model Puzzle {
+  id              Int      @id @default(autoincrement())
+  fen             String   // position with the solver to move
+  solution        Json     // UCI moves alternating solver / opponent reply
+  themes          String   // comma-separated, e.g. "mateIn1" / "mateIn2"
+  rating          Float    @default(1500)
+  ratingDeviation Float    @default(150)
+  volatility      Float    @default(0.06)
+  plays           Int      @default(0)
+  solves          Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  attempts PuzzleAttempt[]
+}
+
+model PuzzleAttempt {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  puzzleId     Int
+  solved       Boolean
+  ratingBefore Float
+  ratingAfter  Float
+  createdAt    DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id])
+  puzzle Puzzle @relation(fields: [puzzleId], references: [id])
+
+  @@index([userId])
+  @@index([puzzleId])
 }

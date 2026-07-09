@@ -18,6 +18,8 @@ export const FRONTEND_STATIC_ROUTES: string[] = [
   "/register",
   "/game",
   "/history",
+  "/puzzles",
+  "/leaderboard",
 ];
 
 /**
@@ -25,7 +27,8 @@ export const FRONTEND_STATIC_ROUTES: string[] = [
  * Add a RegExp here for every parameterised React-Router path.
  */
 export const FRONTEND_DYNAMIC_ROUTES: RegExp[] = [
-  /^\/game\/[^/]+$/, // /game/:gameId  (GameReplay screen)
+  /^\/game\/[^/]+$/, // /game/:gameId
+  /^\/history\/[^/]+$/, // /history/:gameId  (GameReplay screen)
 ];
 
 /**

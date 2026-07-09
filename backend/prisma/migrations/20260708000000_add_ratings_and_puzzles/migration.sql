@@ -1,0 +1,51 @@
+-- Glicko-2 rating fields on User
+ALTER TABLE "User" ADD COLUMN "rating" DOUBLE PRECISION NOT NULL DEFAULT 1500;
+ALTER TABLE "User" ADD COLUMN "ratingDeviation" DOUBLE PRECISION NOT NULL DEFAULT 350;
+ALTER TABLE "User" ADD COLUMN "volatility" DOUBLE PRECISION NOT NULL DEFAULT 0.06;
+ALTER TABLE "User" ADD COLUMN "puzzleRating" DOUBLE PRECISION NOT NULL DEFAULT 1500;
+ALTER TABLE "User" ADD COLUMN "puzzleRatingDeviation" DOUBLE PRECISION NOT NULL DEFAULT 350;
+ALTER TABLE "User" ADD COLUMN "puzzleVolatility" DOUBLE PRECISION NOT NULL DEFAULT 0.06;
+
+-- Rating snapshots on Game
+ALTER TABLE "Game" ADD COLUMN "rated" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Game" ADD COLUMN "whiteRatingBefore" DOUBLE PRECISION;
+ALTER TABLE "Game" ADD COLUMN "whiteRatingAfter" DOUBLE PRECISION;
+ALTER TABLE "Game" ADD COLUMN "blackRatingBefore" DOUBLE PRECISION;
+ALTER TABLE "Game" ADD COLUMN "blackRatingAfter" DOUBLE PRECISION;
+
+-- Puzzle table
+CREATE TABLE "Puzzle" (
+    "id" SERIAL NOT NULL,
+    "fen" TEXT NOT NULL,
+    "solution" JSONB NOT NULL,
+    "themes" TEXT NOT NULL,
+    "rating" DOUBLE PRECISION NOT NULL DEFAULT 1500,
+    "ratingDeviation" DOUBLE PRECISION NOT NULL DEFAULT 150,
+    "volatility" DOUBLE PRECISION NOT NULL DEFAULT 0.06,
+    "plays" INTEGER NOT NULL DEFAULT 0,
+    "solves" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "Puzzle_pkey" PRIMARY KEY ("id")
+);
+
+-- PuzzleAttempt table
+CREATE TABLE "PuzzleAttempt" (
+    "id" SERIAL NOT NULL,
+    "userId" INTEGER NOT NULL,
+    "puzzleId" INTEGER NOT NULL,
+    "solved" BOOLEAN NOT NULL,
+    "ratingBefore" DOUBLE PRECISION NOT NULL,
+    "ratingAfter" DOUBLE PRECISION NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "PuzzleAttempt_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX "PuzzleAttempt_userId_idx" ON "PuzzleAttempt"("userId");
+CREATE INDEX "PuzzleAttempt_puzzleId_idx" ON "PuzzleAttempt"("puzzleId");
+
+ALTER TABLE "PuzzleAttempt" ADD CONSTRAINT "PuzzleAttempt_userId_fkey"
+    FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "PuzzleAttempt" ADD CONSTRAINT "PuzzleAttempt_puzzleId_fkey"
+    FOREIGN KEY ("puzzleId") REFERENCES "Puzzle"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

@@ -25,6 +25,18 @@ export const Landing = () => {
                     {user ? (
                         <div className="flex items-center gap-4">
                             <button
+                                onClick={() => navigate("/puzzles")}
+                                className="text-gray-300 hover:text-white text-sm transition"
+                            >
+                                Puzzles
+                            </button>
+                            <button
+                                onClick={() => navigate("/leaderboard")}
+                                className="text-gray-300 hover:text-white text-sm transition"
+                            >
+                                Leaderboard
+                            </button>
+                            <button
                                 onClick={() => navigate("/history")}
                                 className="text-gray-300 hover:text-white text-sm transition"
                             >
@@ -42,6 +54,12 @@ export const Landing = () => {
                         </div>
                     ) : (
                         <div className="flex items-center gap-3">
+                            <button
+                                onClick={() => navigate("/leaderboard")}
+                                className="text-gray-300 hover:text-white text-sm font-medium transition"
+                            >
+                                Leaderboard
+                            </button>
                             <button
                                 onClick={() => navigate("/login")}
                                 className="text-gray-300 hover:text-white text-sm font-medium transition"
