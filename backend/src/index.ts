@@ -7,11 +7,32 @@ import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
 import path from "path";
+import fs from "fs";
 
 import AuthRouter from "./routes/authRoutes";
 import { GameManager } from "./chess/GameManager";
 import { verifyToken } from "./utils/jwt";
 import { isFrontendRoute } from "./frontendRegistry";
+
+// ---------------------------------------------------------------------------
+// Resolve the frontend build directory
+// Works in BOTH modes:
+//  dev  → ts-node-dev runs from backend/src   → ../../frontend/dist
+//  prod → compiled file at backend/dist/src   → ../../../frontend/dist
+// ---------------------------------------------------------------------------
+const distCandidates = [
+  path.resolve(__dirname, "../../frontend/dist"),
+  path.resolve(__dirname, "../../../frontend/dist"),
+];
+const frontendDist =
+  distCandidates.find((p) => fs.existsSync(path.join(p, "index.html"))) ??
+  distCandidates[0];
+
+if (!fs.existsSync(path.join(frontendDist, "index.html"))) {
+  console.warn(
+    "⚠ frontend/dist not found — run `npm run build` inside the frontend folder first."
+  );
+}
 
 const app = express();
 
@@ -42,13 +63,8 @@ app.use(express.json());
 app.use("/api", AuthRouter);
 
 // ---------------------------------------------------------------------------
-// Static frontend serving
-// tsconfig uses "module": "commonjs" so __dirname is available natively.
-// At runtime the compiled file lives at backend/dist/src/index.js, so
-// we resolve ../../../frontend/dist to reach the Vite build output.
+// Static frontend serving (path resolved above, works in dev and prod)
 // ---------------------------------------------------------------------------
-const frontendDist = path.resolve(__dirname, "../../frontend/dist");
-
 app.use(express.static(frontendDist));
 
 // ---------------------------------------------------------------------------

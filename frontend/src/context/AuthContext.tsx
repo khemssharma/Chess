@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 
-const API_URL = "";
+const API_URL = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
 const TOKEN_KEY = "chess_auth_token";
 const USER_KEY = "chess_auth_user";
 

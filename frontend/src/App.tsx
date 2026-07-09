@@ -7,6 +7,8 @@ import { Login } from './screens/Login';
 import { Register } from './screens/Register';
 import { History } from './screens/History';
 import { GameReplay } from './screens/GameReplay';
+import { Puzzles } from './screens/Puzzles';
+import { Leaderboard } from './screens/Leaderboard';
 
 // Redirect authenticated users away from login/register
 const GuestOnly = ({ children }: { children: React.ReactNode }) => {
@@ -33,6 +35,8 @@ function AppRoutes() {
           <Route path="/register" element={<GuestOnly><Register /></GuestOnly>} />
           <Route path="/history" element={<AuthOnly><History /></AuthOnly>} />
           <Route path="/history/:gameId" element={<AuthOnly><GameReplay /></AuthOnly>} />
+          <Route path="/puzzles" element={<AuthOnly><Puzzles /></AuthOnly>} />
+          <Route path="/leaderboard" element={<Leaderboard />} />
           <Route path="*" element={<Navigate to="/game" replace />} />
         </Routes>
       </BrowserRouter>

@@ -265,6 +265,18 @@ export const Game = () => {
                         {user ? (
                             <>
                                 <button
+                                    onClick={() => navigate("/puzzles")}
+                                    className="text-gray-400 hover:text-white text-sm transition"
+                                >
+                                    Puzzles
+                                </button>
+                                <button
+                                    onClick={() => navigate("/leaderboard")}
+                                    className="text-gray-400 hover:text-white text-sm transition"
+                                >
+                                    Leaderboard
+                                </button>
+                                <button
                                     onClick={() => navigate("/history")}
                                     className="text-gray-400 hover:text-white text-sm transition"
                                 >

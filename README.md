@@ -58,3 +58,35 @@ DEPLOY_RENDER.md contains deployment instructions.
 - Update documentation if needed.
 
 Thank you for contributing!
+
+## Glicko-2 Ratings & Puzzles (lichess-style)
+
+### Glicko-2 Rating System
+Every player has a rating (default 1500), rating deviation (uncertainty), and volatility — updated
+after each **rated PvP game** using the full Glicko-2 algorithm (`backend/src/services/glicko2.ts`),
+the same system lichess.org uses. Implementation is verified against the worked example in
+Glickman's paper (glicko.net/glicko/glicko2.pdf). Computer games and guest games are unrated.
+Rating snapshots (before/after) are stored on each Game record.
+
+- `GET /api/leaderboard?type=game|puzzle` — top 50 players (public)
+- Frontend: `/leaderboard` (Game and Puzzle tabs, provisional "?" badge when RD > 110)
+
+### Puzzles
+Rating-matched tactics training (`/puzzles`, login required):
+- Puzzles are served within ±300 of your **puzzle rating** (tracked separately from game rating)
+- Each attempt is a Glicko-2 match between you and the puzzle — puzzles gain/lose rating too,
+  so difficulty self-calibrates over time (exactly the lichess model)
+- Solves are **verified server-side** by replaying your moves against the stored solution
+  (any legal checkmate is accepted on the final move), so ratings can't be farmed
+- Stats: rating, accuracy %, and current solve streak
+
+**Seeding puzzles** (30 built-in, machine-verified mate-in-1/mate-in-2):
+```bash
+cd backend
+npm run db:migrate          # applies the ratings + puzzles migration
+npm run db:seed:puzzles     # seeds the built-in verified set
+```
+Optionally import from the lichess open puzzle database (CC0, https://database.lichess.org/#puzzles):
+```bash
+node prisma/seedPuzzles.js lichess_db_puzzle.csv 500
+```

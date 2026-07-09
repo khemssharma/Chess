@@ -4,7 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import { Chess } from "chess.js";
 import ChessAIAssistant from "../components/ChessAIAssistant";
 
-const API_URL = "";
+const API_URL = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
 
 interface Move { from: string; to: string; promotion?: string; }
 

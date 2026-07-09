@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
-const API_URL = "";
+const API_URL = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
 
 interface GameRecord {
   id: string;
@@ -68,6 +68,18 @@ export const History = () => {
             <span className="text-xl font-bold">ChessMaster</span>
           </Link>
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => navigate("/puzzles")}
+              className="text-gray-400 hover:text-white text-sm transition"
+            >
+              Puzzles
+            </button>
+            <button
+              onClick={() => navigate("/leaderboard")}
+              className="text-gray-400 hover:text-white text-sm transition"
+            >
+              Leaderboard
+            </button>
             <span className="text-gray-400 text-sm">
               Signed in as <span className="text-white font-medium">{user?.username}</span>
             </span>

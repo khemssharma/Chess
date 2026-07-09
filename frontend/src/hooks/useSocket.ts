@@ -1,12 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 
-// Derive WebSocket URL from the current page origin (same server).
-// Works for both local dev (http → ws) and production (https → wss).
-function getWsBase(): string {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}`;
-}
+const WS_BASE = (import.meta.env.VITE_WS_URL as string) || "ws://localhost:3000";
 
 export const useSocket = () => {
   const [socket, setSocket] = useState<WebSocket | null>(null);
@@ -20,10 +15,9 @@ export const useSocket = () => {
     // playerId reconnect fails.
     if (isLoading) return;
 
-    const wsBase = getWsBase();
     // Append JWT as query param so the server can link games to the user's profile.
     // Guests (no token) can still play; their games won't appear in history.
-    const url = token ? `${wsBase}?token=${encodeURIComponent(token)}` : wsBase;
+    const url = token ? `${WS_BASE}?token=${encodeURIComponent(token)}` : WS_BASE;
     const ws = new WebSocket(url);
 
     ws.onopen = () => setSocket(ws);

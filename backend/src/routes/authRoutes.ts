@@ -4,6 +4,8 @@ import AuthMiddleware from "../middlewares/authMiddleware";
 import GameController from "../controllers/gameController";
 import AnalysisController from "../controllers/analysisController";
 import AIController from "../controllers/aiController";
+import PuzzleController from "../controllers/puzzleController";
+import LeaderboardController from "../controllers/leaderboardController";
 
 const router = Router();
 
@@ -23,5 +25,13 @@ router.post("/games/:gameId/analyze", AuthMiddleware.authenticate, AnalysisContr
 router.post("/games/:gameId/ai-analyze", AuthMiddleware.authenticate, AIController.generateAnalysis);
 router.post("/games/:gameId/ai-chat", AuthMiddleware.authenticate, AIController.chat);
 router.delete("/games/:gameId/ai-session", AuthMiddleware.authenticate, AIController.clearSession);
+
+// Puzzles — rating-matched tactics training (Glicko-2 rated)
+router.get("/puzzles/next", AuthMiddleware.authenticate, PuzzleController.getNext);
+router.get("/puzzles/me", AuthMiddleware.authenticate, PuzzleController.getMyStats);
+router.post("/puzzles/:puzzleId/attempt", AuthMiddleware.authenticate, PuzzleController.submitAttempt);
+
+// Leaderboard — public
+router.get("/leaderboard", LeaderboardController.getLeaderboard);
 
 export default router;

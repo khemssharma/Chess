@@ -1,19 +1,41 @@
 services:
   - type: web
-    name: chess-app
+    name: chess-backend
     runtime: node
     region: oregon
     branch: main
+    rootDir: backend
     buildCommand: >-
       curl -L https://github.com/official-stockfish/Stockfish/releases/download/sf_17/stockfish-ubuntu-x86-64-avx2.tar
       -o /tmp/sf.tar &&
       tar -xf /tmp/sf.tar -C /tmp &&
       cp /tmp/stockfish/stockfish-ubuntu-x86-64-avx2 ./stockfish-bin &&
       chmod +x ./stockfish-bin &&
+      npm install &&
       npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
+      - key: CLIENT_URL
+        value: https://chess-app-jii7.onrender.com
       - key: STOCKFISH_PATH
         value: ./stockfish-bin
+
+  - type: web
+    name: chess-frontend
+    runtime: static
+    region: oregon
+    branch: main
+    rootDir: frontend
+    buildCommand: npm install && npx tsc
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://chess-gf05.onrender.com
+      - key: VITE_WS_URL
+        value: wss://chess-gf05.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

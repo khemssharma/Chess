@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client'
+import RatingService from './ratingService';
 
 const prisma = new PrismaClient();
 
@@ -43,6 +44,22 @@ class GameHistoryService {
     console.log(
       `Game ${params.gameId} saved to DB — winner: ${params.winner}, reason: ${params.reason}, vsComputer: ${params.isVsComputer ?? false}`
     );
+
+    // Glicko-2 rating update — only rated PvP games between two logged-in users.
+    // Computer games and guest games never touch ratings (same policy as lichess casual games).
+    if (!params.isVsComputer && params.whiteUserId && params.blackUserId) {
+      try {
+        await RatingService.applyGameResult({
+          gameId: params.gameId,
+          whiteUserId: params.whiteUserId,
+          blackUserId: params.blackUserId,
+          winner: params.winner,
+        });
+      } catch (err) {
+        // Rating failure must never break game persistence
+        console.error(`Rating update failed for game ${params.gameId}:`, err);
+      }
+    }
   }
 
   /**

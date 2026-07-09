@@ -10,7 +10,8 @@
     "start": "node dist/src/index.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:push": "prisma db push"
+    "db:push": "prisma db push",
+    "db:seed:puzzles": "node prisma/seedPuzzles.js"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
