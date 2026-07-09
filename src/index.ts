@@ -21,8 +21,8 @@ import { isFrontendRoute } from "./frontendRegistry";
 //  prod → compiled file at backend/dist/src   → ../../../frontend/dist
 // ---------------------------------------------------------------------------
 const distCandidates = [
-  path.resolve(__dirname, "../../frontend/dist"),
-  path.resolve(__dirname, "../../../frontend/dist"),
+  path.resolve(__dirname, "../ui/dist"),
+  path.resolve(__dirname, "../../ui/dist"),
 ];
 const frontendDist =
   distCandidates.find((p) => fs.existsSync(path.join(p, "index.html"))) ??
@@ -30,7 +30,7 @@ const frontendDist =
 
 if (!fs.existsSync(path.join(frontendDist, "index.html"))) {
   console.warn(
-    "⚠ frontend/dist not found — run `npm run build` inside the frontend folder first."
+    "⚠ ui/dist not found — run `npm run build` inside the ui folder first."
   );
 }
 
