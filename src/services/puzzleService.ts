@@ -1,8 +1,6 @@
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma";
 import { Chess } from "chess.js";
 import { updateRating, GlickoRating } from "./glicko2";
-
-const prisma = new PrismaClient();
 
 /**
  * Puzzle format (lichess-style single line):

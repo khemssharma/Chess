@@ -1,6 +1,7 @@
 import { Router } from "express";
 import AuthController from "../controllers/authController";
 import AuthMiddleware from "../middlewares/authMiddleware";
+import { authRateLimiter } from "../middlewares/rateLimiters";
 import GameController from "../controllers/gameController";
 import AnalysisController from "../controllers/analysisController";
 import AIController from "../controllers/aiController";
@@ -9,9 +10,9 @@ import LeaderboardController from "../controllers/leaderboardController";
 
 const router = Router();
 
-router.post("/auth/register", AuthController.signup);
-router.post("/auth/login", AuthController.login);
-router.post("/auth/google", AuthController.googleLogin);
+router.post("/auth/register", authRateLimiter, AuthController.signup);
+router.post("/auth/login", authRateLimiter, AuthController.login);
+router.post("/auth/google", authRateLimiter, AuthController.googleLogin);
 router.get("/auth/me", AuthMiddleware.authenticate, AuthController.getMe);
 
 // Chess game history — protected routes
