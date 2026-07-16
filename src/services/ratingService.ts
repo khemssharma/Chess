@@ -1,7 +1,5 @@
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma";
 import { updatePair, GlickoRating } from "./glicko2";
-
-const prisma = new PrismaClient();
 
 interface RatedGameResult {
   gameId: string;

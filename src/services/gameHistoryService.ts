@@ -1,7 +1,5 @@
-import { PrismaClient } from '@prisma/client'
+import { prisma } from '../lib/prisma'
 import RatingService from './ratingService';
-
-const prisma = new PrismaClient();
 
 interface SaveGameResultParams {
   gameId: string;

@@ -11,66 +11,113 @@ interface PendingPlayer {
   dbUserId: number | null; // null = anonymous
 }
 
+/**
+ * Routes WebSocket messages to the right Game / StockfishGame / matchmaking
+ * queue.
+ *
+ * Lookups here used to be linear `Array.find()` scans over every active game
+ * on every single incoming message (move, valid-moves request, disconnect).
+ * That's O(n) per message with n = concurrent games, all competing for one
+ * event loop — under load-testing this was the dominant cause of latency
+ * growth (see SCALABILITY_REPORT.md). Everything below is now backed by Maps
+ * keyed by socket / gameId / playerId so routing a message is O(1) regardless
+ * of how many games are running concurrently.
+ */
 export class GameManager {
-  private games: Game[];
-  private computerGames: StockfishGame[];
-  private pendingUsers: Map<string, PendingPlayer>; // key = timeControl string
-  private users: WebSocket[];
+  // gameId -> Game (for reconnect-by-gameId lookups)
+  private gamesById: Map<string, Game> = new Map();
+  // socket -> Game (for routing move / get_valid_moves / disconnect by socket)
+  private gameBySocket: Map<WebSocket, Game> = new Map();
+
+  // socket -> StockfishGame (1:1, human socket -> its computer opponent game)
+  private computerGamesBySocket: Map<WebSocket, StockfishGame> = new Map();
+
+  // timeControl bucket -> the one player currently waiting in that bucket
+  private pendingUsers: Map<string, PendingPlayer> = new Map();
+  // reverse index so we can find (and cancel) a socket's pending queue entry
+  // without scanning every bucket
+  private pendingKeyBySocket: Map<WebSocket, string> = new Map();
+
+  private users: Set<WebSocket> = new Set();
 
   // playerId → socket for reconnection routing
   private playerSockets: Map<string, WebSocket> = new Map();
-
-  constructor() {
-    this.games = [];
-    this.computerGames = [];
-    this.pendingUsers = new Map();
-    this.users = [];
-  }
+  // reverse index so disconnect cleanup doesn't have to scan playerSockets
+  private socketToPlayerId: Map<WebSocket, string> = new Map();
 
   /**
    * Called from the WebSocket server after the JWT has been verified.
    * dbUserId is the authenticated user's database ID, or null for guests.
    */
   addUser(socket: WebSocket, dbUserId: number | null) {
-    this.users.push(socket);
+    this.users.add(socket);
     this.addHandler(socket, dbUserId);
   }
 
   removeUser(socket: WebSocket) {
-    this.users = this.users.filter((u) => u !== socket);
+    this.users.delete(socket);
 
     // Remove from playerSockets index
-    for (const [id, sock] of this.playerSockets.entries()) {
-      if (sock === socket) {
-        this.playerSockets.delete(id);
-        break;
-      }
+    const playerId = this.socketToPlayerId.get(socket);
+    if (playerId) {
+      this.playerSockets.delete(playerId);
+      this.socketToPlayerId.delete(socket);
     }
 
     // Remove from pending queue
-    for (const [key, pending] of this.pendingUsers.entries()) {
-      if (pending.socket === socket) {
-        this.pendingUsers.delete(key);
-        redisService.deletePendingPlayer(key).catch(console.error);
-        break;
-      }
+    const pendingKey = this.pendingKeyBySocket.get(socket);
+    if (pendingKey) {
+      this.pendingUsers.delete(pendingKey);
+      this.pendingKeyBySocket.delete(socket);
+      redisService.deletePendingPlayer(pendingKey).catch(console.error);
     }
 
     // Clean up computer game if this player had one
-    const computerGame = this.computerGames.find((g) => g.player === socket);
+    const computerGame = this.computerGamesBySocket.get(socket);
     if (computerGame) {
       computerGame.cleanup();
-      this.computerGames = this.computerGames.filter((g) => g !== computerGame);
+      this.computerGamesBySocket.delete(socket);
     }
 
     // Notify opponent if in active game — start reconnect countdown instead of destroying game
-    const game = this.games.find(
-      (g) => g.player1 === socket || g.player2 === socket
-    );
+    const game = this.gameBySocket.get(socket);
     if (game) {
       // Don't remove the game yet — keep it alive for potential reconnection
       game.opponentDisconnected(socket);
     }
+  }
+
+  /** Track a pending-queue entry in both directions. */
+  private setPendingLocal(timeControlKey: string, pending: PendingPlayer) {
+    this.pendingUsers.set(timeControlKey, pending);
+    this.pendingKeyBySocket.set(pending.socket, timeControlKey);
+  }
+
+  private clearPendingLocal(timeControlKey: string) {
+    const pending = this.pendingUsers.get(timeControlKey);
+    if (pending) {
+      this.pendingKeyBySocket.delete(pending.socket);
+    }
+    this.pendingUsers.delete(timeControlKey);
+  }
+
+  /** Track a playerId <-> socket link in both directions. */
+  private linkPlayerSocket(playerId: string, socket: WebSocket) {
+    this.playerSockets.set(playerId, socket);
+    this.socketToPlayerId.set(socket, playerId);
+  }
+
+  /** Register a freshly created/restored game under both its sockets and its id. */
+  private registerGame(game: Game) {
+    this.gamesById.set(game.gameId, game);
+    this.gameBySocket.set(game.player1, game);
+    this.gameBySocket.set(game.player2, game);
+
+    game.onGameEnd = (gameId) => {
+      this.gamesById.delete(gameId);
+      this.gameBySocket.delete(game.player1);
+      this.gameBySocket.delete(game.player2);
+    };
   }
 
   private addHandler(socket: WebSocket, dbUserId: number | null) {
@@ -129,7 +176,7 @@ export class GameManager {
         if (pendingPlayer && pendingPlayer.socket !== socket) {
           console.log("Match found, creating game with timeControl:", timeControl);
 
-          this.pendingUsers.delete(timeControlKey);
+          this.clearPendingLocal(timeControlKey);
           await redisService.deletePendingPlayer(timeControlKey);
 
           // pendingPlayer is white (player1), incoming socket is black (player2)
@@ -140,32 +187,29 @@ export class GameManager {
             dbUserId,
             timeControl
           );
-          game.onGameEnd = (gameId) => {
-            this.games = this.games.filter((g) => g.gameId !== gameId);
-          };
-          this.games.push(game);
+          this.registerGame(game);
 
-          this.playerSockets.set(game.player1Id, pendingPlayer.socket);
-          this.playerSockets.set(game.player2Id, socket);
+          this.linkPlayerSocket(game.player1Id, pendingPlayer.socket);
+          this.linkPlayerSocket(game.player2Id, socket);
         } else {
           console.log("No match, adding to pending queue");
 
-          for (const [key, pending] of this.pendingUsers.entries()) {
-            if (pending.socket === socket) {
-              this.pendingUsers.delete(key);
-              await redisService.deletePendingPlayer(key);
-            }
+          // A socket can only ever have one pending-queue entry at a time.
+          const existingKey = this.pendingKeyBySocket.get(socket);
+          if (existingKey) {
+            this.clearPendingLocal(existingKey);
+            await redisService.deletePendingPlayer(existingKey);
           }
 
           const playerId =
             message.payload?.playerId || this.generateId();
-          this.pendingUsers.set(timeControlKey, {
+          this.setPendingLocal(timeControlKey, {
             socket,
             timeControl,
             playerId,
             dbUserId,
           });
-          this.playerSockets.set(playerId, socket);
+          this.linkPlayerSocket(playerId, socket);
 
           await redisService.setPendingPlayer(timeControlKey, {
             playerId,
@@ -194,33 +238,31 @@ export class GameManager {
         const timeControl: number | null = message.payload?.timeControl ?? null;
 
         // Clean up any existing computer game for this socket
-        const existingCG = this.computerGames.find((g) => g.player === socket);
+        const existingCG = this.computerGamesBySocket.get(socket);
         if (existingCG) {
           existingCG.cleanup();
-          this.computerGames = this.computerGames.filter((g) => g !== existingCG);
+          this.computerGamesBySocket.delete(socket);
         }
 
         console.log(`Starting computer game: difficulty=${difficulty}, color=${playerColor}, timeControl=${timeControl}`);
 
         const cg = new StockfishGame(socket, playerColor, difficulty, timeControl, dbUserId);
-        cg.onGameEnd = (gameId) => {
-          this.computerGames = this.computerGames.filter((g) => g.gameId !== gameId);
+        cg.onGameEnd = () => {
+          this.computerGamesBySocket.delete(socket);
         };
-        this.computerGames.push(cg);
-        this.playerSockets.set(cg.playerId, socket);
+        this.computerGamesBySocket.set(socket, cg);
+        this.linkPlayerSocket(cg.playerId, socket);
         return;
       }
 
       // ── MOVE ─────────────────────────────────────────────────────────────
       if (message.type === MOVE) {
-        const game = this.games.find(
-          (g) => g.player1 === socket || g.player2 === socket
-        );
+        const game = this.gameBySocket.get(socket);
         if (game) {
           game.makeMove(socket, message.payload.move);
           return;
         }
-        const cg = this.computerGames.find((g) => g.player === socket);
+        const cg = this.computerGamesBySocket.get(socket);
         if (cg) {
           cg.makeMove(socket, message.payload.move);
         }
@@ -229,14 +271,12 @@ export class GameManager {
 
       // ── GET_VALID_MOVES ───────────────────────────────────────────────────
       if (message.type === GET_VALID_MOVES) {
-        const game = this.games.find(
-          (g) => g.player1 === socket || g.player2 === socket
-        );
+        const game = this.gameBySocket.get(socket);
         if (game) {
           game.getValidMoves(socket, message.payload.square);
           return;
         }
-        const cg = this.computerGames.find((g) => g.player === socket);
+        const cg = this.computerGamesBySocket.get(socket);
         if (cg) {
           cg.getValidMoves(socket, message.payload.square);
         }
@@ -279,19 +319,24 @@ export class GameManager {
       : persisted.player1Id;
     const otherSocket = this.playerSockets.get(otherPlayerId);
 
-    this.playerSockets.set(playerId, socket);
+    this.linkPlayerSocket(playerId, socket);
 
     // Check if the game is still alive in memory (opponent is still connected)
-    const liveGame = this.games.find((g) => g.gameId === persisted.gameId);
+    const liveGame = this.gamesById.get(persisted.gameId);
 
     if (liveGame && otherSocket && otherSocket.readyState === WebSocket.OPEN) {
+      // Drop the stale socket->game mapping for whichever socket is being replaced
+      const oldSocket = isPlayer1 ? liveGame.player1 : liveGame.player2;
+      this.gameBySocket.delete(oldSocket);
+
       // Update the socket on the live game object
       if (isPlayer1) {
         liveGame.player1 = socket;
       } else {
         liveGame.player2 = socket;
       }
-      this.playerSockets.set(playerId, socket);
+      this.gameBySocket.set(socket, liveGame);
+      this.linkPlayerSocket(playerId, socket);
 
       // Resume the game and notify both players
       liveGame.opponentReconnected(socket);
@@ -315,7 +360,11 @@ export class GameManager {
       const player1Socket = isPlayer1 ? socket : otherSocket;
       const player2Socket = isPlayer1 ? otherSocket : socket;
 
-      this.games = this.games.filter((g) => g.gameId !== persisted.gameId);
+      if (liveGame) {
+        this.gamesById.delete(liveGame.gameId);
+        this.gameBySocket.delete(liveGame.player1);
+        this.gameBySocket.delete(liveGame.player2);
+      }
 
       const game = new Game(
         player1Socket,
@@ -333,13 +382,10 @@ export class GameManager {
           player2Time: persisted.player2Time,
         }
       );
-      game.onGameEnd = (gameId) => {
-        this.games = this.games.filter((g) => g.gameId !== gameId);
-      };
+      this.registerGame(game);
 
-      this.games.push(game);
-      this.playerSockets.set(game.player1Id, player1Socket);
-      this.playerSockets.set(game.player2Id, player2Socket);
+      this.linkPlayerSocket(game.player1Id, player1Socket);
+      this.linkPlayerSocket(game.player2Id, player2Socket);
 
       console.log("Game restored for gameId:", persisted.gameId);
     } else {

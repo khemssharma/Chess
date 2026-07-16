@@ -1,111 +1,95 @@
 # Scalability report — Chess app
 
 Tested by running the scripts in `load-tests/` against the real backend
-(`src/index.ts`, unmodified) with guest-vs-guest games, which don't touch
-Postgres or Redis — so these numbers isolate the WebSocket game engine itself.
-Environment: **single CPU core**, 4GB RAM sandbox — so treat absolute numbers
-as directional, not a production capacity plan. The trend (how latency grows
-with concurrency) is the important part, and it will reproduce on any single
-Node process regardless of host core count, because this app is unclustered.
+(`src/index.ts`) with guest-vs-guest games, which don't touch Postgres or
+Redis — so these numbers isolate the WebSocket game engine itself.
+Environment: **single CPU core**, 4GB RAM sandbox, with the load-test client
+and the server sharing that one core — so treat absolute numbers as
+directional, not a production capacity plan.
 
-## What was tested
+**Update: the fixes described below have been applied to the code.** This
+report now shows the original findings, what was changed, and a genuine
+before/after re-test — including where the fix helped less than expected, so
+the numbers stay honest rather than telling a clean success story.
 
-- `load-tests/ws-load-test.ts` — real matchmaking + real games, N concurrent
-  pairs, randomized-but-legal moves via `chess.js`, latency measured end to end.
-- `load-tests/rest-load-test.ts` — `autocannon` against `/api/leaderboard`,
-  optionally `/api/signup` if you have a live DB.
+## What was fixed
 
-## Results: WebSocket game engine
+1. **`GameManager` O(n) linear scans → O(1) Map lookups.** `games`/`computerGames`
+   were plain arrays scanned with `.find()` on every incoming message (move,
+   valid-moves request, disconnect). Replaced with `Map<WebSocket, Game>` /
+   `Map<WebSocket, StockfishGame>` (plus `Map<string, Game>` by gameId, and
+   reverse-index maps for the pending-queue and playerId↔socket lookups that
+   were also doing `for...of` scans on disconnect). See `src/chess/GameManager.ts`.
 
-| Concurrent games | Sockets | Move round-trip p50 | p99 | Completed cleanly |
-|---:|---:|---:|---:|---:|
-| 20  | 40   | ~110 ms  | ~200 ms  | 100% |
-| 200 | 400  | ~1,600 ms | ~2,100 ms | 100% |
-| 500 | 1,000 | ~2,570 ms | ~3,380 ms | 100% |
-
-Nothing crashed or dropped connections at any of these levels — the server
-stayed correct. But latency degrades fast and non-linearly as concurrency
-rises, which is the real finding.
-
-**Why:** `GameManager` (`src/chess/GameManager.ts`) stores active games and
-sockets in plain arrays and does `this.games.find(...)` / linear scans on
-*every* incoming WebSocket message (`move`, `get_valid_moves`, matchmaking).
-That's an O(n) lookup per message with n = concurrent games, all on a single
-event loop. At 500 games that's 1,000 players' worth of moves each doing a
-linear scan through 500 entries, competing for the same thread. This is the
-dominant cost — there's no per-game CPU-heavy work otherwise (chess.js move
-validation is cheap).
-
-A secondary, latent cost: when a game has a time control, `Game.ts` runs a
-`setInterval` **every 100ms per active game** to push clock updates to both
-players (`startTimeTracking`). At 500 timed games that's 5,000 timer callbacks/sec
-system-wide, each doing 2 sends — this test used untimed games specifically to
-isolate the array-scan cost from this; in production, timed games (the common
-case) will add this on top.
-
-## Results: REST API
-
-`/api/leaderboard` (no DB configured in this sandbox, so every request hit the
-error path) sustained **~1,470 req/s** at 50 concurrent connections on one
-core, p50 latency 28ms, p99 101ms — the HTTP layer itself is not a bottleneck
-at this scale. The real ceiling for auth-related endpoints will be bcrypt
-(CPU-bound, cost factor 10) and Postgres connection pool limits, which
-couldn't be measured here without a live database — run
-`INCLUDE_AUTH=1 npm run loadtest:rest` against a deployed/staging instance
-with `DATABASE_URL` set to get real numbers for that path.
-
-## Structural issues found while testing (not just numbers)
-
-1. **In-memory, single-process game state.** `GameManager`'s `games`,
-   `users`, and `pendingUsers` live only in that process's memory. This means:
-   - You cannot run more than one server instance behind a load balancer
-     without breaking active games and matchmaking — a player matched on
-     instance A can't be reached by a move sent to instance B. Redis here is
-     used for *reconnect persistence* (surviving a restart/reconnect), not for
-     cross-instance routing.
-   - The array scans described above get linearly worse with every concurrent
-     game, with no way to shard the work across cores in-process.
-
-2. **Four independent `PrismaClient` instances** — one each in
+2. **Four separate `PrismaClient` instances → one shared client.** Each of
    `authServices.ts`, `gameHistoryService.ts`, `ratingService.ts`, and
-   `puzzleService.ts`. Each opens its own connection pool to Postgres, so
-   under load you get up to 4x the DB connections you'd expect from a single
-   shared client. Low-risk, high-value fix:
-   ```ts
-   // src/lib/prisma.ts
-   import { PrismaClient } from "@prisma/client";
-   export const prisma = new PrismaClient();
-   ```
-   ...and import `prisma` from there in all four files instead of constructing
-   a new one each.
+   `puzzleService.ts` used to run `new PrismaClient()` independently, each
+   opening its own Postgres connection pool. They now all import a single
+   instance from `src/lib/prisma.ts`.
 
-3. **No rate limiting** on `/api/signup` or `/api/login`. Combined with
-   bcrypt at cost 10 (deliberately slow), a burst of concurrent auth requests
-   is the most CPU-expensive thing this API can be asked to do — worth putting
-   behind something like `express-rate-limit` before it's internet-facing.
+3. **No rate limiting on auth → `express-rate-limit` added.** `/api/auth/register`,
+   `/api/auth/login`, and `/api/auth/google` are now limited to 20 requests per
+   IP per 15 minutes (`src/middlewares/rateLimiters.ts`), since each of those
+   requests does real bcrypt work (cost factor 10) and/or a DB write.
 
-4. **Prisma client instantiated eagerly at module load** in all four files
-   above (`const prisma = new PrismaClient()` at the top of the file). This
-   isn't a runtime scalability issue, but it did surface during setup here:
-   if `prisma generate` hasn't been run (e.g. a fresh clone, restricted CI
-   network), the entire process — including the WebSocket game engine, which
-   needs no database at all — fails to boot. Worth knowing if you ever see the
-   whole app down because of a Postgres/codegen hiccup unrelated to gameplay.
+None of this changes gameplay behavior, message formats, or the API surface —
+only how the server tracks internal state and guards the auth endpoints.
 
-## Suggested priority
+## Before / after: WebSocket game engine
 
-1. Fix the `GameManager` array scans — swap `games: Game[]` /
-   `computerGames: StockfishGame[]` for `Map<socket, Game>` lookups (or a
-   `Map<gameId, Game>` plus a `Map<WebSocket, gameId>` index) so move/valid-moves
-   routing is O(1) instead of O(n). This alone should flatten the latency curve
-   seen above.
-2. Consolidate the four `PrismaClient`s into one shared instance.
-3. Add rate limiting to `/api/signup` and `/api/login`.
-4. If/when you need more than one server instance: matchmaking and live game
-   state need to move to something shared (Redis pub/sub or a dedicated game
-   server), since right now horizontal scaling silently breaks active games
-   rather than erroring loudly.
+| Concurrent games | Sockets | Move round-trip p50 (before) | Move round-trip p50 (after) |
+|---:|---:|---:|---:|
+| 20  | 40   | ~110 ms   | ~110 ms (no change — expected, n is tiny either way) |
+| 200 | 400  | ~1,600 ms | ~1,260 ms (~20% better) |
+| 500 | 1,000 | ~2,570 ms | ~2,400 ms (~7% better) |
 
-None of these were changed as part of this pass — the load tests are left in
-`load-tests/` so you can re-run them yourself (`npm run loadtest`) before and
-after making any of these changes to see the before/after difference directly.
+**Honest read of this:** the Map refactor is a real, correct fix — it removes
+genuine O(n) work and per-disconnect array-copy allocations, and it's the
+right way to write this regardless of benchmarks. But on this single-core
+sandbox, where the load-test client and the server are fighting over the same
+core, it only produced a modest improvement rather than a dramatic one. That
+tells us the linear scan was *a* contributor to the latency curve, not the
+whole story — the bigger factor at this scale is that everything (matchmaking,
+game logic, all N games' message handling) runs on one Node process's one
+event loop with no clustering, and my test client's own CPU usage competes for
+that same core in this environment.
+
+**What this means for you:** re-run `npm run loadtest:ws` yourself with the
+client and server on separate machines (or at least confirm your production
+host has more than one core available to compare against) to see the isolated
+server-side effect more cleanly than this sandbox could show. The fix is
+in either way — it was worth doing on correctness/GC-pressure grounds even
+before considering the benchmark.
+
+## Still true after these fixes (not addressed — bigger architectural changes)
+
+1. **No horizontal scaling.** Game and matchmaking state still live only in
+   this one process's memory (now in Maps instead of arrays, but still local).
+   Redis is used for reconnect *persistence*, not live traffic routing, so you
+   still can't run two server instances behind a load balancer without
+   breaking active games. Fixing this means moving matchmaking/game state to
+   something shared (Redis pub/sub, or a dedicated game-server tier) — a much
+   bigger change than what was done here, and not something I'd do silently
+   without discussing the approach with you first.
+
+2. **Per-game 100ms timers for timed games.** `Game.ts` runs a `setInterval`
+   every 100ms per active timed game to push clock updates. At high concurrency
+   this adds up (500 timed games = 5,000 timer callbacks/sec system-wide).
+   Untouched — a fix here (e.g. a single shared ticking loop that batches
+   updates) is a bigger behavioral change to game timing and felt like it
+   deserved its own discussion rather than folding it into this pass.
+
+3. **REST auth path under real DB load.** Still can't be measured without a
+   live Postgres instance — run `INCLUDE_AUTH=1 npm run loadtest:rest` against
+   a staging/deployed instance with `DATABASE_URL` set.
+
+## Re-running the tests
+
+```bash
+npm run dev            # start the server
+npm run loadtest:ws    # WebSocket game-engine test
+npm run loadtest:rest  # REST API benchmark
+npm run loadtest        # both
+```
+
+See `load-tests/README.md` for env vars (`PAIRS`, `MOVE_DELAY_MS`, `WS_URL`, etc).
