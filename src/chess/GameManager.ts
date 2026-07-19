@@ -1,8 +1,9 @@
 import { WebSocket } from "ws";
-import { INIT_GAME, MOVE, GET_VALID_MOVES, RECONNECT, PLAY_VS_COMPUTER } from "./messages";
+import { INIT_GAME, MOVE, GET_VALID_MOVES, RECONNECT, PLAY_VS_COMPUTER, GAME_STATE } from "./messages";
 import { Game } from "./Game";
 import { StockfishGame, Difficulty } from "./StockfishGame";
-import { redisService } from "./RedisService";
+import { redisService, GameCommandEnvelope, ToPlayerEnvelope } from "./RedisService";
+import { v4 as uuidv4 } from "uuid";
 
 interface PendingPlayer {
   socket: WebSocket;
@@ -11,39 +12,133 @@ interface PendingPlayer {
   dbUserId: number | null; // null = anonymous
 }
 
+const OWNERSHIP_TTL_SECONDS = 60;
+const OWNERSHIP_REFRESH_MS = 20_000;
+
 /**
  * Routes WebSocket messages to the right Game / StockfishGame / matchmaking
  * queue.
  *
- * Lookups here used to be linear `Array.find()` scans over every active game
- * on every single incoming message (move, valid-moves request, disconnect).
- * That's O(n) per message with n = concurrent games, all competing for one
- * event loop — under load-testing this was the dominant cause of latency
- * growth (see SCALABILITY_REPORT.md). Everything below is now backed by Maps
- * keyed by socket / gameId / playerId so routing a message is O(1) regardless
- * of how many games are running concurrently.
+ * ── Horizontal scaling ──────────────────────────────────────────────────────
+ * Render assigns each incoming WebSocket connection to a random instance —
+ * there's no sticky-session option for WS here — so the two players in a
+ * game can easily end up on two different processes. Every process runs its
+ * own GameManager with its own local Maps; a Game object physically lives in
+ * exactly one instance's memory (whichever instance created or rebuilt it —
+ * its "owner"), and Game itself no longer touches WebSocket objects at all
+ * (see Game.ts). Two Redis pub/sub channels bridge the gap:
+ *
+ *  - `chess:to-player`   (RedisService.publishToPlayer / onPlayerMessage)
+ *      Game -> client delivery. Every instance subscribes; each one checks
+ *      whether it holds that playerId's live local socket and, if so,
+ *      forwards the message. Instances that don't own the Game use this to
+ *      learn (opportunistically, on the first delivery) which gameId a local
+ *      player belongs to — see `remoteGameByPlayerId` below.
+ *
+ *  - `chess:game-command` (RedisService.publishGameCommand / onGameCommand)
+ *      client -> Game delivery, the reverse direction. When a MOVE (etc.)
+ *      arrives on an instance that doesn't own the Game locally, it's
+ *      forwarded here; every instance subscribes, and only the one with a
+ *      matching entry in `gamesById` (the owner) actually acts on it.
+ *
+ * Matchmaking's pending-player queue was already Redis-backed for
+ * persistence, but the old code required the *other* player's socket to be
+ * present in this same instance's local map to complete a match — which
+ * silently failed (and just re-queued) whenever the waiting player was
+ * connected to a different instance. That's fixed below: matches complete
+ * using playerId identity alone, and `chess:to-player` handles delivering
+ * INIT_GAME to whichever instance actually holds that player's socket.
+ * Matching itself now goes through `consumePendingPlayer` (Redis GETDEL),
+ * which is atomic — the old GET-then-DELETE pair could let two instances
+ * both match against the same waiting player at once.
  */
 export class GameManager {
-  // gameId -> Game (for reconnect-by-gameId lookups)
+  private readonly instanceId = uuidv4();
+
+  get id(): string {
+    return this.instanceId;
+  }
+
+  // gameId -> Game, for games this instance owns (created or rebuilt here).
   private gamesById: Map<string, Game> = new Map();
-  // socket -> Game (for routing move / get_valid_moves / disconnect by socket)
+  // socket -> Game, local fast path for owned games (no Redis round-trip).
   private gameBySocket: Map<WebSocket, Game> = new Map();
+  // gameId -> (playerId -> local socket), so ended/rebuilt/reconnected games
+  // can clean up or replace exactly the right gameBySocket entries.
+  private socketsForGame: Map<string, Map<string, WebSocket>> = new Map();
+
+  // playerId -> gameId, for local sockets whose Game is owned by *another*
+  // instance. Populated opportunistically whenever a chess:to-player message
+  // is delivered to a socket this instance doesn't own a Game for.
+  private remoteGameByPlayerId: Map<string, string> = new Map();
 
   // socket -> StockfishGame (1:1, human socket -> its computer opponent game)
+  // Always fully local — no cross-instance concerns for vs-computer games.
   private computerGamesBySocket: Map<WebSocket, StockfishGame> = new Map();
 
-  // timeControl bucket -> the one player currently waiting in that bucket
+  // timeControl bucket -> the one player currently waiting in that bucket,
+  // *if* they're connected to this instance. The authoritative copy (which
+  // may belong to a waiter on a different instance) lives in Redis.
   private pendingUsers: Map<string, PendingPlayer> = new Map();
-  // reverse index so we can find (and cancel) a socket's pending queue entry
-  // without scanning every bucket
   private pendingKeyBySocket: Map<WebSocket, string> = new Map();
 
   private users: Set<WebSocket> = new Set();
 
-  // playerId → socket for reconnection routing
+  // playerId -> socket, only for sockets actually connected to this instance.
   private playerSockets: Map<string, WebSocket> = new Map();
-  // reverse index so disconnect cleanup doesn't have to scan playerSockets
   private socketToPlayerId: Map<WebSocket, string> = new Map();
+
+  constructor() {
+    redisService.onPlayerMessage((envelope) => this.handleToPlayerMessage(envelope));
+    redisService.onGameCommand((envelope) => this.handleGameCommand(envelope));
+
+    // Keep this instance's ownership claim on its live games fresh so a
+    // healthy owner is never mistaken for a crashed one (see
+    // RedisService.claimGameOwnership).
+    setInterval(() => {
+      for (const gameId of this.gamesById.keys()) {
+        redisService
+          .refreshGameOwnership(gameId, this.instanceId, OWNERSHIP_TTL_SECONDS)
+          .catch(console.error);
+      }
+    }, OWNERSHIP_REFRESH_MS);
+  }
+
+  // ── Cross-instance message handlers ─────────────────────────────────────────
+
+  /** A Game (wherever it lives) wants to deliver `message` to `playerId`. */
+  private handleToPlayerMessage({ playerId, gameId, message }: ToPlayerEnvelope) {
+    const socket = this.playerSockets.get(playerId);
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify(message));
+
+    // If we don't own this game locally, remember where to forward this
+    // player's future commands.
+    if (!this.gameBySocket.has(socket)) {
+      this.remoteGameByPlayerId.set(playerId, gameId);
+    }
+  }
+
+  /** A client action was forwarded here from an instance that doesn't own the Game. */
+  private handleGameCommand(envelope: GameCommandEnvelope) {
+    const game = this.gamesById.get(envelope.gameId);
+    if (!game) return; // not ours — some other instance (or nobody) owns it
+
+    switch (envelope.type) {
+      case "MOVE":
+        game.makeMove(envelope.playerId, envelope.payload?.move);
+        break;
+      case "GET_VALID_MOVES":
+        game.getValidMoves(envelope.playerId, envelope.payload?.square);
+        break;
+      case "DISCONNECT":
+        game.opponentDisconnected(envelope.playerId);
+        break;
+      case "RECONNECT":
+        game.opponentReconnected(envelope.playerId);
+        break;
+    }
+  }
 
   /**
    * Called from the WebSocket server after the JWT has been verified.
@@ -57,7 +152,6 @@ export class GameManager {
   removeUser(socket: WebSocket) {
     this.users.delete(socket);
 
-    // Remove from playerSockets index
     const playerId = this.socketToPlayerId.get(socket);
     if (playerId) {
       this.playerSockets.delete(playerId);
@@ -67,8 +161,7 @@ export class GameManager {
     // Remove from pending queue
     const pendingKey = this.pendingKeyBySocket.get(socket);
     if (pendingKey) {
-      this.pendingUsers.delete(pendingKey);
-      this.pendingKeyBySocket.delete(socket);
+      this.clearPendingLocal(pendingKey);
       redisService.deletePendingPlayer(pendingKey).catch(console.error);
     }
 
@@ -79,11 +172,20 @@ export class GameManager {
       this.computerGamesBySocket.delete(socket);
     }
 
-    // Notify opponent if in active game — start reconnect countdown instead of destroying game
-    const game = this.gameBySocket.get(socket);
-    if (game) {
-      // Don't remove the game yet — keep it alive for potential reconnection
-      game.opponentDisconnected(socket);
+    if (!playerId) return;
+
+    // Notify the game (local or remote) that this player disconnected, so it
+    // can start the reconnect countdown instead of dying immediately.
+    const localGame = this.gameBySocket.get(socket);
+    if (localGame) {
+      localGame.opponentDisconnected(playerId);
+      return;
+    }
+    const remoteGameId = this.remoteGameByPlayerId.get(playerId);
+    if (remoteGameId) {
+      redisService
+        .publishGameCommand({ gameId: remoteGameId, playerId, type: "DISCONNECT" })
+        .catch(console.error);
     }
   }
 
@@ -101,22 +203,50 @@ export class GameManager {
     this.pendingUsers.delete(timeControlKey);
   }
 
-  /** Track a playerId <-> socket link in both directions. */
+  /** Track a playerId <-> socket link in both directions (local instance only). */
   private linkPlayerSocket(playerId: string, socket: WebSocket) {
     this.playerSockets.set(playerId, socket);
     this.socketToPlayerId.set(socket, playerId);
   }
 
-  /** Register a freshly created/restored game under both its sockets and its id. */
-  private registerGame(game: Game) {
+  /**
+   * Point a game's playerId at the local socket that currently represents it
+   * (used both at creation and on reconnect-to-the-owner-instance). Replaces
+   * any previous local socket registered for that playerId/game.
+   */
+  private setLocalGameSocket(gameId: string, playerId: string, socket: WebSocket, game: Game) {
+    let bySlot = this.socketsForGame.get(gameId);
+    if (!bySlot) {
+      bySlot = new Map();
+      this.socketsForGame.set(gameId, bySlot);
+    }
+    const prev = bySlot.get(playerId);
+    if (prev) this.gameBySocket.delete(prev);
+    bySlot.set(playerId, socket);
+    this.gameBySocket.set(socket, game);
+    this.remoteGameByPlayerId.delete(playerId); // we own it locally now
+  }
+
+  /** Register a freshly created/rebuilt game that THIS instance owns. */
+  private registerGame(
+    game: Game,
+    locals: { player1Socket?: WebSocket; player2Socket?: WebSocket }
+  ) {
     this.gamesById.set(game.gameId, game);
-    this.gameBySocket.set(game.player1, game);
-    this.gameBySocket.set(game.player2, game);
+    if (locals.player1Socket) {
+      this.setLocalGameSocket(game.gameId, game.player1Id, locals.player1Socket, game);
+    }
+    if (locals.player2Socket) {
+      this.setLocalGameSocket(game.gameId, game.player2Id, locals.player2Socket, game);
+    }
 
     game.onGameEnd = (gameId) => {
       this.gamesById.delete(gameId);
-      this.gameBySocket.delete(game.player1);
-      this.gameBySocket.delete(game.player2);
+      const bySlot = this.socketsForGame.get(gameId);
+      if (bySlot) {
+        for (const s of bySlot.values()) this.gameBySocket.delete(s);
+        this.socketsForGame.delete(gameId);
+      }
     };
   }
 
@@ -138,96 +268,7 @@ export class GameManager {
 
       // ── INIT_GAME ────────────────────────────────────────────────────────
       if (message.type === INIT_GAME) {
-        let timeControl: number | null = null;
-        if (
-          message.payload?.timeControl !== undefined &&
-          message.payload.timeControl !== null
-        ) {
-          timeControl = message.payload.timeControl;
-        }
-
-        const timeControlKey =
-          timeControl === null ? "unlimited" : timeControl.toString();
-
-        console.log(
-          `Player (dbUserId=${dbUserId}) requesting game, timeControl:`,
-          timeControl
-        );
-
-        let pendingPlayer = this.pendingUsers.get(timeControlKey);
-
-        if (!pendingPlayer) {
-          const redisPending = await redisService.getPendingPlayer(timeControlKey);
-          if (redisPending) {
-            const pendingSocket = this.playerSockets.get(redisPending.playerId);
-            if (pendingSocket && pendingSocket !== socket) {
-              pendingPlayer = {
-                socket: pendingSocket,
-                timeControl,
-                playerId: redisPending.playerId,
-                dbUserId: redisPending.dbUserId,
-              };
-            } else if (!pendingSocket) {
-              await redisService.deletePendingPlayer(timeControlKey);
-            }
-          }
-        }
-
-        if (pendingPlayer && pendingPlayer.socket !== socket) {
-          console.log("Match found, creating game with timeControl:", timeControl);
-
-          this.clearPendingLocal(timeControlKey);
-          await redisService.deletePendingPlayer(timeControlKey);
-
-          // pendingPlayer is white (player1), incoming socket is black (player2)
-          const game = new Game(
-            pendingPlayer.socket,
-            socket,
-            pendingPlayer.dbUserId,
-            dbUserId,
-            timeControl
-          );
-          this.registerGame(game);
-
-          this.linkPlayerSocket(game.player1Id, pendingPlayer.socket);
-          this.linkPlayerSocket(game.player2Id, socket);
-        } else {
-          console.log("No match, adding to pending queue");
-
-          // A socket can only ever have one pending-queue entry at a time.
-          const existingKey = this.pendingKeyBySocket.get(socket);
-          if (existingKey) {
-            this.clearPendingLocal(existingKey);
-            await redisService.deletePendingPlayer(existingKey);
-          }
-
-          const playerId =
-            message.payload?.playerId || this.generateId();
-          this.setPendingLocal(timeControlKey, {
-            socket,
-            timeControl,
-            playerId,
-            dbUserId,
-          });
-          this.linkPlayerSocket(playerId, socket);
-
-          await redisService.setPendingPlayer(timeControlKey, {
-            playerId,
-            dbUserId,
-            timeControl,
-            timestamp: Date.now(),
-          });
-
-          socket.send(
-            JSON.stringify({
-              type: "WAITING",
-              payload: {
-                message: "Waiting for opponent with same time control...",
-                timeControl,
-              },
-            })
-          );
-        }
+        await this.handleInitGame(socket, message, dbUserId);
         return;
       }
 
@@ -258,13 +299,28 @@ export class GameManager {
       // ── MOVE ─────────────────────────────────────────────────────────────
       if (message.type === MOVE) {
         const game = this.gameBySocket.get(socket);
-        if (game) {
-          game.makeMove(socket, message.payload.move);
+        const playerId = this.socketToPlayerId.get(socket);
+        if (game && playerId) {
+          game.makeMove(playerId, message.payload.move);
           return;
         }
         const cg = this.computerGamesBySocket.get(socket);
         if (cg) {
           cg.makeMove(socket, message.payload.move);
+          return;
+        }
+        if (playerId) {
+          const remoteGameId = this.remoteGameByPlayerId.get(playerId);
+          if (remoteGameId) {
+            redisService
+              .publishGameCommand({
+                gameId: remoteGameId,
+                playerId,
+                type: "MOVE",
+                payload: { move: message.payload.move },
+              })
+              .catch(console.error);
+          }
         }
         return;
       }
@@ -272,17 +328,123 @@ export class GameManager {
       // ── GET_VALID_MOVES ───────────────────────────────────────────────────
       if (message.type === GET_VALID_MOVES) {
         const game = this.gameBySocket.get(socket);
-        if (game) {
-          game.getValidMoves(socket, message.payload.square);
+        const playerId = this.socketToPlayerId.get(socket);
+        if (game && playerId) {
+          game.getValidMoves(playerId, message.payload.square);
           return;
         }
         const cg = this.computerGamesBySocket.get(socket);
         if (cg) {
           cg.getValidMoves(socket, message.payload.square);
+          return;
+        }
+        if (playerId) {
+          const remoteGameId = this.remoteGameByPlayerId.get(playerId);
+          if (remoteGameId) {
+            redisService
+              .publishGameCommand({
+                gameId: remoteGameId,
+                playerId,
+                type: "GET_VALID_MOVES",
+                payload: { square: message.payload.square },
+              })
+              .catch(console.error);
+          }
         }
         return;
       }
     });
+  }
+
+  private async handleInitGame(socket: WebSocket, message: any, dbUserId: number | null) {
+    let timeControl: number | null = null;
+    if (message.payload?.timeControl !== undefined && message.payload.timeControl !== null) {
+      timeControl = message.payload.timeControl;
+    }
+
+    const timeControlKey = timeControl === null ? "unlimited" : timeControl.toString();
+
+    console.log(`Player (dbUserId=${dbUserId}) requesting game, timeControl:`, timeControl);
+
+    let matchedPlayerId: string | null = null;
+    let matchedDbUserId: number | null = null;
+    let matchedLocalSocket: WebSocket | undefined;
+
+    const localPending = this.pendingUsers.get(timeControlKey);
+    if (localPending && localPending.socket !== socket) {
+      // Both players are on this instance — resolve without touching Redis.
+      this.clearPendingLocal(timeControlKey);
+      redisService.deletePendingPlayer(timeControlKey).catch(console.error);
+      matchedPlayerId = localPending.playerId;
+      matchedDbUserId = localPending.dbUserId;
+      matchedLocalSocket = localPending.socket;
+    } else {
+      // Ask Redis — this is how we discover a player waiting on a *different*
+      // instance. Atomic GETDEL: exactly one instance can win this match.
+      const redisPending = await redisService.consumePendingPlayer(timeControlKey);
+      if (redisPending && redisPending.playerId !== this.socketToPlayerId.get(socket)) {
+        matchedPlayerId = redisPending.playerId;
+        matchedDbUserId = redisPending.dbUserId;
+        matchedLocalSocket = this.playerSockets.get(redisPending.playerId); // defined only if they're ALSO local to this instance
+      } else if (redisPending) {
+        // We consumed our own pending entry — put it back, it wasn't a real match.
+        await redisService.setPendingPlayer(timeControlKey, redisPending);
+      }
+    }
+
+    if (matchedPlayerId) {
+      console.log("Match found, creating game with timeControl:", timeControl);
+
+      const player2Id = uuidv4();
+
+      // Link identities BEFORE constructing the Game: its constructor sends
+      // INIT_GAME immediately, and delivery (local or via chess:to-player)
+      // depends on playerSockets already knowing which local socket owns
+      // which playerId. Getting this order backwards is a real race, not
+      // just a theoretical one — Redis pub/sub delivery (including an
+      // instance receiving its own publish back) happens over the network,
+      // so there's no guarantee it'd lose a race against a later, separate
+      // await elsewhere in this function.
+      if (matchedLocalSocket) {
+        this.linkPlayerSocket(matchedPlayerId, matchedLocalSocket);
+      }
+      this.linkPlayerSocket(player2Id, socket);
+
+      const game = new Game(matchedPlayerId, player2Id, matchedDbUserId, dbUserId, timeControl);
+
+      await redisService.claimGameOwnership(game.gameId, this.instanceId, OWNERSHIP_TTL_SECONDS);
+      this.registerGame(game, { player1Socket: matchedLocalSocket, player2Socket: socket });
+    } else {
+      console.log("No match, adding to pending queue");
+
+      // A socket can only ever have one pending-queue entry at a time.
+      const existingKey = this.pendingKeyBySocket.get(socket);
+      if (existingKey) {
+        this.clearPendingLocal(existingKey);
+        await redisService.deletePendingPlayer(existingKey);
+      }
+
+      const playerId = message.payload?.playerId || this.generateId();
+      this.setPendingLocal(timeControlKey, { socket, timeControl, playerId, dbUserId });
+      this.linkPlayerSocket(playerId, socket);
+
+      await redisService.setPendingPlayer(timeControlKey, {
+        playerId,
+        dbUserId,
+        timeControl,
+        timestamp: Date.now(),
+      });
+
+      socket.send(
+        JSON.stringify({
+          type: "WAITING",
+          payload: {
+            message: "Waiting for opponent with same time control...",
+            timeControl,
+          },
+        })
+      );
+    }
   }
 
   private async handleReconnect(
@@ -314,90 +476,86 @@ export class GameManager {
     }
 
     const isPlayer1 = persisted.player1Id === playerId;
-    const otherPlayerId = isPlayer1
-      ? persisted.player2Id
-      : persisted.player1Id;
-    const otherSocket = this.playerSockets.get(otherPlayerId);
 
     this.linkPlayerSocket(playerId, socket);
 
-    // Check if the game is still alive in memory (opponent is still connected)
     const liveGame = this.gamesById.get(persisted.gameId);
 
-    if (liveGame && otherSocket && otherSocket.readyState === WebSocket.OPEN) {
-      // Drop the stale socket->game mapping for whichever socket is being replaced
-      const oldSocket = isPlayer1 ? liveGame.player1 : liveGame.player2;
-      this.gameBySocket.delete(oldSocket);
+    if (liveGame) {
+      // We already own this Game object locally — fully local, fast path.
+      this.setLocalGameSocket(persisted.gameId, playerId, socket, liveGame);
+      liveGame.opponentReconnected(playerId);
 
-      // Update the socket on the live game object
-      if (isPlayer1) {
-        liveGame.player1 = socket;
-      } else {
-        liveGame.player2 = socket;
-      }
-      this.gameBySocket.set(socket, liveGame);
-      this.linkPlayerSocket(playerId, socket);
-
-      // Resume the game and notify both players
-      liveGame.opponentReconnected(socket);
-
-      // Resend full game state to the reconnecting player
       const basePayload = {
         fen: liveGame.board.fen(),
-        moveCount: liveGame["moveCount"],
-        whiteTime: liveGame["player1Time"] !== null ? Math.max(0, liveGame["player1Time"]) : null,
-        blackTime: liveGame["player2Time"] !== null ? Math.max(0, liveGame["player2Time"]) : null,
+        moveCount: liveGame.moveNumber,
+        whiteTime:
+          liveGame.player1TimeRemaining !== null ? Math.max(0, liveGame.player1TimeRemaining) : null,
+        blackTime:
+          liveGame.player2TimeRemaining !== null ? Math.max(0, liveGame.player2TimeRemaining) : null,
         timeControl: persisted.timeControl,
         yourColor: isPlayer1 ? "white" : "black",
       };
-      socket.send(JSON.stringify({ type: "game_state", payload: basePayload }));
-
-      console.log("Player reconnected to live game:", persisted.gameId);
+      socket.send(JSON.stringify({ type: GAME_STATE, payload: basePayload }));
+      console.log("Player reconnected to live game (local):", persisted.gameId);
       return;
     }
 
-    if (otherSocket && otherSocket.readyState === WebSocket.OPEN) {
-      const player1Socket = isPlayer1 ? socket : otherSocket;
-      const player2Socket = isPlayer1 ? otherSocket : socket;
+    // Not owned locally. The `game_owner:{gameId}` claim (SET NX, refreshed
+    // periodically by whoever holds it — see the constructor's interval and
+    // handleInitGame) is the single source of truth for "is a live owner
+    // still out there," so try to claim it ourselves rather than relying on
+    // a second, separately-racy signal like player presence:
+    //
+    //  - Claim succeeds  → nobody's actively holding it (either this is the
+    //    first reconnect after the owner crashed and its claim's TTL has
+    //    lapsed, or — vanishingly likely — the claim key was never set).
+    //    We become the new owner and rebuild from the last snapshot.
+    //  - Claim fails     → someone else holds it (still the healthy original
+    //    owner, or another instance that won this same race a moment ago).
+    //    Defer to them via the command channel instead of duplicating.
+    const claimed = await redisService.claimGameOwnership(
+      persisted.gameId,
+      this.instanceId,
+      OWNERSHIP_TTL_SECONDS
+    );
 
-      if (liveGame) {
-        this.gamesById.delete(liveGame.gameId);
-        this.gameBySocket.delete(liveGame.player1);
-        this.gameBySocket.delete(liveGame.player2);
-      }
+    if (!claimed) {
+      this.remoteGameByPlayerId.set(playerId, persisted.gameId);
+      redisService
+        .publishGameCommand({ gameId: persisted.gameId, playerId, type: "RECONNECT" })
+        .catch(console.error);
 
-      const game = new Game(
-        player1Socket,
-        player2Socket,
-        persisted.player1DbUserId,
-        persisted.player2DbUserId,
-        persisted.timeControl,
-        {
-          gameId: persisted.gameId,
-          player1Id: persisted.player1Id,
-          player2Id: persisted.player2Id,
-          moveHistory: persisted.moveHistory,
-          moveCount: persisted.moveCount,
-          player1Time: persisted.player1Time,
-          player2Time: persisted.player2Time,
-        }
-      );
-      this.registerGame(game);
-
-      this.linkPlayerSocket(game.player1Id, player1Socket);
-      this.linkPlayerSocket(game.player2Id, player2Socket);
-
-      console.log("Game restored for gameId:", persisted.gameId);
-    } else {
-      socket.send(
-        JSON.stringify({
-          type: "WAITING_FOR_OPPONENT",
-          payload: {
-            message: "Reconnected. Waiting for your opponent to rejoin...",
-          },
-        })
-      );
+      const basePayload = {
+        fen: persisted.fen,
+        moveCount: persisted.moveCount,
+        whiteTime: persisted.player1Time !== null ? Math.max(0, persisted.player1Time) : null,
+        blackTime: persisted.player2Time !== null ? Math.max(0, persisted.player2Time) : null,
+        timeControl: persisted.timeControl,
+        yourColor: isPlayer1 ? "white" : "black",
+      };
+      socket.send(JSON.stringify({ type: GAME_STATE, payload: basePayload }));
+      console.log("Game owned elsewhere (or by a concurrent claimant); deferring:", persisted.gameId);
+      return;
     }
+
+    const game = new Game(
+      persisted.player1Id,
+      persisted.player2Id,
+      persisted.player1DbUserId,
+      persisted.player2DbUserId,
+      persisted.timeControl,
+      {
+        gameId: persisted.gameId,
+        moveHistory: persisted.moveHistory,
+        moveCount: persisted.moveCount,
+        player1Time: persisted.player1Time,
+        player2Time: persisted.player2Time,
+      }
+    );
+    this.registerGame(game, isPlayer1 ? { player1Socket: socket } : { player2Socket: socket });
+
+    console.log("Game rebuilt on this instance for gameId:", persisted.gameId);
   }
 
   private generateId(): string {

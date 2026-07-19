@@ -1,10 +1,27 @@
 services:
+  # ── Backend: Node.js WebSocket + REST API ──────────────────────────────────
+  # rootDir is intentionally omitted — the backend's package.json lives at the
+  # repo root (this file's own directory), not in a `backend/` subfolder.
   - type: web
     name: chess-backend
     runtime: node
     region: oregon
     branch: main
-    rootDir: backend
+    # numInstances > 1 requires at least a Starter plan (Free services are
+    # capped at a single instance and can't be scaled). Horizontal scaling
+    # here is safe: game/matchmaking state is relayed through Redis
+    # (src/chess/RedisService.ts + GameManager.ts) instead of living only in
+    # one process's memory, so any instance can serve any client — no sticky
+    # sessions needed (Render's load balancer doesn't offer them anyway).
+    #
+    # To autoscale on CPU/memory instead of a fixed count (requires a Pro
+    # workspace), replace `numInstances` with:
+    #   scaling:
+    #     minInstances: 2
+    #     maxInstances: 5
+    #     targetCPUPercent: 60
+    plan: standard
+    numInstances: 2
     buildCommand: >-
       curl -L https://github.com/official-stockfish/Stockfish/releases/download/sf_17/stockfish-ubuntu-x86-64-avx2.tar
       -o /tmp/sf.tar &&
@@ -14,6 +31,10 @@ services:
       npm install &&
       npm run build
     startCommand: npm start
+    # Give in-flight games a chance to finish delivering messages before a
+    # deploy/scale-down kills the process (paired with the SIGTERM handler in
+    # src/index.ts). Max allowed is 300.
+    maxShutdownDelaySeconds: 60
     envVars:
       - key: NODE_ENV
         value: production
@@ -21,16 +42,40 @@ services:
         value: https://chess-app-jii7.onrender.com
       - key: STOCKFISH_PATH
         value: ./stockfish-bin
+      # Required for cross-instance matchmaking/reconnect routing — without
+      # Redis reachable, each instance falls back to purely local state and
+      # players can only be matched with someone connected to that same
+      # instance. See src/chess/RedisService.ts.
+      - key: REDIS_HOST
+        fromService:
+          type: keyvalue
+          name: chess-redis
+          property: host
+      - key: REDIS_PORT
+        fromService:
+          type: keyvalue
+          name: chess-redis
+          property: port
+      # Secrets set manually in the Render dashboard (not stored in git).
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
 
+  # ── Frontend: static React/Vite build ──────────────────────────────────────
   - type: web
     name: chess-frontend
     runtime: static
     region: oregon
     branch: main
-    rootDir: frontend
-    buildCommand: npm install && npx tsc
+    rootDir: ui
+    buildCommand: npm install && npm run build
     staticPublishPath: dist
     envVars:
+      # Replace with the actual chess-backend URL Render assigns after the
+      # first deploy (Settings tab shows it) if it differs from these.
       - key: VITE_API_URL
         value: https://chess-gf05.onrender.com
       - key: VITE_WS_URL
@@ -39,3 +84,15 @@ services:
       - type: rewrite
         source: /*
         destination: /index.html
+
+  # ── Shared Redis (Render's Key Value product; `type: redis` still works as
+  # a deprecated alias for the same thing) — the single source of truth that
+  # lets chess-backend run as more than one instance: matchmaking, active
+  # game state, and reconnect handoffs all go through here instead of one
+  # process's memory. See SCALABILITY_REPORT.md for what moved and why.
+  - type: keyvalue
+    name: chess-redis
+    region: oregon
+    plan: free
+    maxmemoryPolicy: noeviction
+    ipAllowList: [] # empty = only reachable from services in this same Render project (private network)
