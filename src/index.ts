@@ -88,6 +88,12 @@ const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
 const gameManager = new GameManager();
+console.log(
+  `Game routing instance id: ${gameManager.id}` +
+    (process.env.REDIS_HOST
+      ? " (Redis cross-instance relay enabled — safe to run multiple instances)"
+      : " (Redis disabled — matches/reconnects only work within THIS single instance)")
+);
 
 wss.on("connection", (ws: WebSocket, req) => {
   let dbUserId: number | null = null;
@@ -123,3 +129,23 @@ server.listen(PORT, () => {
       : " CORS: all origins allowed\n"
   );
 });
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown — Render sends SIGTERM on every deploy/scale-down/restart
+// and gives a grace window (default 30s, configurable via
+// maxShutdownDelaySeconds) before force-killing the process. Stop accepting
+// new HTTP/WS connections immediately; leave already-open game sockets alone
+// rather than tearing them down ourselves — when they do eventually drop
+// (Render's hard kill, or the client's own reconnect logic), the affected
+// players reconnect through whichever instance is still up, since game state
+// lives in Redis and isn't tied to this one process (see GameManager /
+// RedisService). That's the whole point of the cross-instance relay: a
+// single instance going away mid-deploy shouldn't lose anyone's game.
+function gracefulShutdown(signal: string) {
+  console.log(`\n${signal} received — draining. New connections are refused; existing games continue until Render's kill timeout.`);
+  server.close(() => {
+    console.log("HTTP/WS server closed — no longer accepting new connections.");
+  });
+}
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));

@@ -1,4 +1,3 @@
-import { WebSocket } from "ws";
 import { Chess } from "chess.js";
 import {
   GAME_OVER,
@@ -15,16 +14,31 @@ import { redisService, PersistedGame } from "./RedisService";
 import { gameHistoryService } from "../services/gameHistoryService";
 import { v4 as uuidv4 } from "uuid";
 
+/**
+ * A Game no longer holds direct WebSocket references. That's the key change
+ * that makes horizontal scaling possible: player1 and player2 can be
+ * connected to two *different* server processes (Render's load balancer
+ * assigns each WebSocket connection to a random instance — there's no
+ * sticky-session option for WS on Render). All delivery to a player goes
+ * through `redisService.publishToPlayer`, which every instance subscribes to
+ * and only actually delivers if it holds that playerId's live socket. All
+ * identity/turn checks are by playerId (a stable string) instead of `===` on
+ * a socket object that only exists in one process's memory.
+ *
+ * Exactly one instance — whichever created or last rebuilt this Game object
+ * — owns it and runs its clock/timers. Client actions that arrive on a
+ * *different* instance are forwarded here via `chess:game-command` (see
+ * GameManager); this class doesn't need to know or care where a message
+ * originated, only which playerId sent it.
+ */
 export class Game {
-  public player1: WebSocket;
-  public player2: WebSocket;
   public board: Chess;
   private startTime: Date;
   private moveCount = 0;
 
   // Persistent identity
   public gameId: string;
-  public player1Id: string;  // ephemeral session ID (stored in Redis)
+  public player1Id: string; // ephemeral session ID (stored in Redis)
   public player2Id: string;
 
   // Link to authenticated DB users (null = anonymous/guest)
@@ -47,23 +61,21 @@ export class Game {
   public onGameEnd: ((gameId: string) => void) | null = null;
 
   constructor(
-    player1: WebSocket,
-    player2: WebSocket,
+    player1Id: string,
+    player2Id: string,
     player1DbUserId: number | null,
     player2DbUserId: number | null,
     timeControlMinutes: number | null = 10,
     restored?: {
       gameId: string;
-      player1Id: string;
-      player2Id: string;
       moveHistory: { from: string; to: string; promotion?: string }[];
       moveCount: number;
       player1Time: number | null;
       player2Time: number | null;
     }
   ) {
-    this.player1 = player1;
-    this.player2 = player2;
+    this.player1Id = player1Id;
+    this.player2Id = player2Id;
     this.player1DbUserId = player1DbUserId;
     this.player2DbUserId = player2DbUserId;
     this.board = new Chess();
@@ -72,8 +84,6 @@ export class Game {
     if (restored) {
       // ── Reconnection path ─────────────────────────────────────────────────
       this.gameId = restored.gameId;
-      this.player1Id = restored.player1Id;
-      this.player2Id = restored.player2Id;
       this.moveCount = restored.moveCount;
 
       for (const move of restored.moveHistory) {
@@ -98,13 +108,11 @@ export class Game {
         timeControl: timeControlMinutes,
       };
 
-      player1.send(JSON.stringify({ type: GAME_STATE, payload: { ...basePayload, yourColor: "white" } }));
-      player2.send(JSON.stringify({ type: GAME_STATE, payload: { ...basePayload, yourColor: "black" } }));
+      this.sendTo(this.player1Id, { type: GAME_STATE, payload: { ...basePayload, yourColor: "white" } });
+      this.sendTo(this.player2Id, { type: GAME_STATE, payload: { ...basePayload, yourColor: "black" } });
     } else {
       // ── Fresh game path ───────────────────────────────────────────────────
       this.gameId = uuidv4();
-      this.player1Id = uuidv4();
-      this.player2Id = uuidv4();
 
       if (timeControlMinutes !== null) {
         this.timeControl = timeControlMinutes * 60 * 1000;
@@ -119,31 +127,48 @@ export class Game {
         this.lastMoveTime = 0;
       }
 
-      player1.send(
-        JSON.stringify({
-          type: INIT_GAME,
-          payload: {
-            color: "white",
-            timeControl: timeControlMinutes,
-            playerId: this.player1Id,
-            gameId: this.gameId,
-          },
-        })
-      );
-      player2.send(
-        JSON.stringify({
-          type: INIT_GAME,
-          payload: {
-            color: "black",
-            timeControl: timeControlMinutes,
-            playerId: this.player2Id,
-            gameId: this.gameId,
-          },
-        })
-      );
+      this.sendTo(this.player1Id, {
+        type: INIT_GAME,
+        payload: {
+          color: "white",
+          timeControl: timeControlMinutes,
+          playerId: this.player1Id,
+          gameId: this.gameId,
+        },
+      });
+      this.sendTo(this.player2Id, {
+        type: INIT_GAME,
+        payload: {
+          color: "black",
+          timeControl: timeControlMinutes,
+          playerId: this.player2Id,
+          gameId: this.gameId,
+        },
+      });
 
       this.persistToRedis();
     }
+  }
+
+  // ── Read-only accessors (used by GameManager to build reconnect payloads) ──
+  get moveNumber(): number {
+    return this.moveCount;
+  }
+  get player1TimeRemaining(): number | null {
+    return this.player1Time;
+  }
+  get player2TimeRemaining(): number | null {
+    return this.player2Time;
+  }
+
+  /** Deliver a message to one player, wherever their socket currently lives. */
+  private sendTo(playerId: string, message: unknown) {
+    redisService.publishToPlayer(playerId, this.gameId, message).catch(console.error);
+  }
+
+  private broadcast(message: unknown) {
+    this.sendTo(this.player1Id, message);
+    this.sendTo(this.player2Id, message);
   }
 
   private buildSnapshot(
@@ -254,8 +279,7 @@ export class Game {
       },
     };
 
-    this.player1.send(JSON.stringify(timeUpdate));
-    this.player2.send(JSON.stringify(timeUpdate));
+    this.broadcast(timeUpdate);
   }
 
   private endGameByTimeout(winner: string) {
@@ -264,23 +288,21 @@ export class Game {
       this.timeUpdateInterval = null;
     }
 
-    const gameOverMessage = {
-      type: GAME_OVER,
-      payload: { winner, reason: "timeout" },
-    };
-    this.player1.send(JSON.stringify(gameOverMessage));
-    this.player2.send(JSON.stringify(gameOverMessage));
+    this.broadcast({ type: GAME_OVER, payload: { winner, reason: "timeout" } });
 
     this.persistToRedis("over", winner, "timeout");
     this.persistGameResult(winner, "timeout");
     redisService
       .deleteGame(this.gameId, this.player1Id, this.player2Id)
       .catch(console.error);
+
+    if (this.onGameEnd) this.onGameEnd(this.gameId);
   }
 
-  makeMove(socket: WebSocket, move: { from: string; to: string }) {
-    if (this.moveCount % 2 === 0 && socket !== this.player1) return;
-    if (this.moveCount % 2 === 1 && socket !== this.player2) return;
+  /** `callerPlayerId` is whichever player sent the move — resolved by GameManager from the socket (local) or from a relayed game-command (remote). */
+  makeMove(callerPlayerId: string, move: { from: string; to: string; promotion?: string }) {
+    if (this.moveCount % 2 === 0 && callerPlayerId !== this.player1Id) return;
+    if (this.moveCount % 2 === 1 && callerPlayerId !== this.player2Id) return;
 
     try {
       this.board.move(move);
@@ -310,26 +332,23 @@ export class Game {
 
       const finalWinner = this.board.isDraw() ? null : winner;
 
-      const gameOverMsg = JSON.stringify({
-        type: GAME_OVER,
-        payload: { winner: finalWinner, reason },
-      });
-      this.player1.send(gameOverMsg);
-      this.player2.send(gameOverMsg);
+      this.broadcast({ type: GAME_OVER, payload: { winner: finalWinner, reason } });
 
       this.persistToRedis("over", finalWinner, reason);
       this.persistGameResult(finalWinner, reason);
       redisService
         .deleteGame(this.gameId, this.player1Id, this.player2Id)
         .catch(console.error);
+
+      if (this.onGameEnd) this.onGameEnd(this.gameId);
       return;
     }
 
-    const moveMsg = JSON.stringify({ type: MOVE, payload: move });
+    const moveMsg = { type: MOVE, payload: move };
     if ((this.moveCount - 1) % 2 === 0) {
-      this.player2.send(moveMsg);
+      this.sendTo(this.player2Id, moveMsg);
     } else {
-      this.player1.send(moveMsg);
+      this.sendTo(this.player1Id, moveMsg);
     }
 
     if (this.timeControl !== null) {
@@ -339,46 +358,40 @@ export class Game {
     this.persistToRedis();
   }
 
-  getValidMoves(socket: WebSocket, square: string) {
+  getValidMoves(callerPlayerId: string, square: string) {
     const isPlayer1Turn = this.moveCount % 2 === 0;
-    if (isPlayer1Turn && socket !== this.player1) {
-      socket.send(
-        JSON.stringify({ type: VALID_MOVES, payload: { square, moves: [] } })
-      );
+    if (isPlayer1Turn && callerPlayerId !== this.player1Id) {
+      this.sendTo(callerPlayerId, { type: VALID_MOVES, payload: { square, moves: [] } });
       return;
     }
-    if (!isPlayer1Turn && socket !== this.player2) {
-      socket.send(
-        JSON.stringify({ type: VALID_MOVES, payload: { square, moves: [] } })
-      );
+    if (!isPlayer1Turn && callerPlayerId !== this.player2Id) {
+      this.sendTo(callerPlayerId, { type: VALID_MOVES, payload: { square, moves: [] } });
       return;
     }
 
     const moves = this.board.moves({ square: square as any, verbose: true });
-    socket.send(
-      JSON.stringify({
-        type: VALID_MOVES,
-        payload: {
-          square,
-          moves: moves.map((m: any) => ({
-            from: m.from,
-            to: m.to,
-            promotion: m.promotion,
-          })),
-        },
-      })
-    );
+    this.sendTo(callerPlayerId, {
+      type: VALID_MOVES,
+      payload: {
+        square,
+        moves: moves.map((m: any) => ({
+          from: m.from,
+          to: m.to,
+          promotion: m.promotion,
+        })),
+      },
+    });
   }
 
   /**
-   * Called by GameManager when one player's WebSocket closes.
-   * Pauses that player's clock, notifies the staying player with a countdown,
-   * and schedules a forfeit if they don't reconnect in time.
+   * Called by GameManager when one player's WebSocket closes — whether that
+   * socket lives on this instance (owner) or was relayed here from another
+   * instance via a DISCONNECT game-command.
    */
-  opponentDisconnected(disconnectedSocket: WebSocket) {
-    const isPlayer1 = disconnectedSocket === this.player1;
-    this.disconnectedPlayerId = isPlayer1 ? this.player1Id : this.player2Id;
-    const stayingSocket = isPlayer1 ? this.player2 : this.player1;
+  opponentDisconnected(disconnectedPlayerId: string) {
+    const isPlayer1 = disconnectedPlayerId === this.player1Id;
+    this.disconnectedPlayerId = disconnectedPlayerId;
+    const stayingPlayerId = isPlayer1 ? this.player2Id : this.player1Id;
     const winnerColor = isPlayer1 ? "black" : "white";
 
     // Pause the game clock so time doesn't drain while opponent is gone
@@ -390,17 +403,10 @@ export class Game {
     let secondsLeft = RECONNECT_TIMEOUT_SECONDS;
 
     const sendCountdown = () => {
-      if (stayingSocket.readyState === stayingSocket.OPEN) {
-        stayingSocket.send(
-          JSON.stringify({
-            type: OPPONENT_DISCONNECTED,
-            payload: {
-              message: "Opponent disconnected.",
-              secondsLeft,
-            },
-          })
-        );
-      }
+      this.sendTo(stayingPlayerId, {
+        type: OPPONENT_DISCONNECTED,
+        payload: { message: "Opponent disconnected.", secondsLeft },
+      });
     };
 
     sendCountdown();
@@ -419,32 +425,23 @@ export class Game {
   }
 
   /**
-   * Called by GameManager when the disconnected player successfully reconnects.
-   * Resumes the game clock and notifies the staying player.
+   * Called by GameManager when the disconnected player successfully
+   * reconnects — anywhere. Since players are identified by playerId (not a
+   * live socket reference this class holds), there's nothing to "swap" here
+   * beyond clearing timers and resuming the clock; delivery already resolves
+   * to wherever the reconnected socket actually is.
    */
-  opponentReconnected(reconnectedSocket: WebSocket) {
+  opponentReconnected(reconnectedPlayerId: string) {
     this.clearDisconnectTimers();
     this.disconnectedPlayerId = null;
 
-    // Update the socket reference for the reconnected player
-    const wasPlayer1 = this.player1Id === this.disconnectedPlayerId ||
-      reconnectedSocket !== this.player2;
-    if (wasPlayer1) {
-      this.player1 = reconnectedSocket;
-    } else {
-      this.player2 = reconnectedSocket;
-    }
+    const isPlayer1 = reconnectedPlayerId === this.player1Id;
+    const stayingPlayerId = isPlayer1 ? this.player2Id : this.player1Id;
 
-    // Notify staying player
-    const stayingSocket = wasPlayer1 ? this.player2 : this.player1;
-    if (stayingSocket.readyState === stayingSocket.OPEN) {
-      stayingSocket.send(
-        JSON.stringify({
-          type: OPPONENT_RECONNECTED,
-          payload: { message: "Opponent reconnected. Game resumes!" },
-        })
-      );
-    }
+    this.sendTo(stayingPlayerId, {
+      type: OPPONENT_RECONNECTED,
+      payload: { message: "Opponent reconnected. Game resumes!" },
+    });
 
     // Resume clock
     if (this.timeControl !== null) {
@@ -470,16 +467,9 @@ export class Game {
       this.timeUpdateInterval = null;
     }
 
-    const gameOverMessage = JSON.stringify({
+    this.broadcast({
       type: GAME_OVER,
       payload: { winner: winnerColor, reason: "opponent_left" },
-    });
-
-    // Only send to the staying (open) socket — the disconnected one is gone
-    [this.player1, this.player2].forEach((s) => {
-      if (s.readyState === s.OPEN) {
-        s.send(gameOverMessage);
-      }
     });
 
     this.persistToRedis("over", winnerColor, "opponent_left");
