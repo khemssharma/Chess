@@ -4,5 +4,6 @@ dist
 .env
 .venv
 .vscode
+.env.example
 
 /src/generated/prisma

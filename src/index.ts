@@ -1,11 +1,10 @@
-import dotenv from "dotenv";
-dotenv.config();
+import "dotenv/config";
 
 import cors from "cors";
 import express from "express";
 import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
-import { parse } from "url";
+import { parse, fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
 
@@ -13,6 +12,9 @@ import AuthRouter from "./routes/authRoutes";
 import { GameManager } from "./chess/GameManager";
 import { verifyToken } from "./utils/jwt";
 import { isFrontendRoute } from "./frontendRegistry";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ---------------------------------------------------------------------------
 // Resolve the frontend build directory

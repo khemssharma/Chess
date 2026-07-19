@@ -1,5 +1,10 @@
 import { spawn } from "child_process";
 import { Chess } from "chess.js";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export type MoveClassification =
   | "brilliant"
@@ -118,7 +123,7 @@ async function getStockfishEval(
 ): Promise<{ score: number; bestMove: string; isMate: boolean; mateIn?: number }> {
   return new Promise((resolve) => {
     const candidates = [
-      `${__dirname}/../../stockfish-bin`,
+      path.join(__dirname, "..", "..", "stockfish-bin"),
       "stockfish",
       "/usr/games/stockfish",
       "/usr/bin/stockfish",
