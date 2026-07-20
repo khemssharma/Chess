@@ -1,6 +1,6 @@
 import { Response } from "express";
-import { AuthenticatedRequest } from "../utils/types";
-import PuzzleService from "../services/puzzleService";
+import { AuthenticatedRequest } from "../utils/types.js";
+import PuzzleService from "../services/puzzleService.js";
 
 class PuzzleController {
   /** GET /api/puzzles/next — rating-matched next puzzle for the logged-in user */
