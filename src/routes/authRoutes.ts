@@ -1,12 +1,12 @@
 import { Router } from "express";
-import AuthController from "../controllers/authController";
-import AuthMiddleware from "../middlewares/authMiddleware";
-import { authRateLimiter } from "../middlewares/rateLimiters";
-import GameController from "../controllers/gameController";
-import AnalysisController from "../controllers/analysisController";
-import AIController from "../controllers/aiController";
-import PuzzleController from "../controllers/puzzleController";
-import LeaderboardController from "../controllers/leaderboardController";
+import AuthController from "../controllers/authController.js";
+import AuthMiddleware from "../middlewares/authMiddleware.js";
+import { authRateLimiter } from "../middlewares/rateLimiters.js";
+import GameController from "../controllers/gameController.js";
+import AnalysisController from "../controllers/analysisController.js";
+import AIController from "../controllers/aiController.js";
+import PuzzleController from "../controllers/puzzleController.js";
+import LeaderboardController from "../controllers/leaderboardController.js";
 
 const router = Router();
 
