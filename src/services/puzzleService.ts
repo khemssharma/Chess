@@ -1,6 +1,6 @@
-import { prisma } from "../lib/prisma";
+import { prisma } from "../lib/prisma.js";
 import { Chess } from "chess.js";
-import { updateRating, GlickoRating } from "./glicko2";
+import { updateRating, GlickoRating } from "./glicko2.js";
 
 /**
  * Puzzle format (lichess-style single line):
