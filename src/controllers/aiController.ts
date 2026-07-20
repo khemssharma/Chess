@@ -1,6 +1,6 @@
 import { Response } from "express";
-import { AuthenticatedRequest } from "../utils/types";
-import { gameHistoryService } from "../services/gameHistoryService";
+import { AuthenticatedRequest } from "../utils/types.js";
+import { gameHistoryService } from "../services/gameHistoryService.js";
 
 // In-memory cache for AI analysis (keyed by gameId)
 const aiAnalysisCache = new Map<string, string>();
