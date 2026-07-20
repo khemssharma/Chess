@@ -9,9 +9,9 @@ import {
   OPPONENT_DISCONNECTED,
   OPPONENT_RECONNECTED,
   RECONNECT_TIMEOUT_SECONDS,
-} from "./messages";
-import { redisService, PersistedGame } from "./RedisService";
-import { gameHistoryService } from "../services/gameHistoryService";
+} from "./messages.js";
+import { redisService, PersistedGame } from "./RedisService.js";
+import { gameHistoryService } from "../services/gameHistoryService.js";
 import { v4 as uuidv4 } from "uuid";
 
 /**
