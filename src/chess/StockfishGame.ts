@@ -12,8 +12,8 @@ import {
   MOVE,
   VALID_MOVES,
   TIME_UPDATE,
-} from "./messages";
-import { gameHistoryService } from "../services/gameHistoryService";
+} from "./messages.js";
+import { gameHistoryService } from "../services/gameHistoryService.js";
 import { v4 as uuidv4 } from "uuid";
 
 export type Difficulty = "easy" | "medium" | "hard" | "expert";

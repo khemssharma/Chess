@@ -1,8 +1,8 @@
 import { WebSocket } from "ws";
-import { INIT_GAME, MOVE, GET_VALID_MOVES, RECONNECT, PLAY_VS_COMPUTER, GAME_STATE } from "./messages";
-import { Game } from "./Game";
-import { StockfishGame, Difficulty } from "./StockfishGame";
-import { redisService, GameCommandEnvelope, ToPlayerEnvelope } from "./RedisService";
+import { INIT_GAME, MOVE, GET_VALID_MOVES, RECONNECT, PLAY_VS_COMPUTER, GAME_STATE } from "./messages.js";
+import { Game } from "./Game.js";
+import { StockfishGame, Difficulty } from "./StockfishGame.js";
+import { redisService, GameCommandEnvelope, ToPlayerEnvelope } from "./RedisService.js";
 import { v4 as uuidv4 } from "uuid";
 
 interface PendingPlayer {

@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import RatingService from "../services/ratingService";
+import RatingService from "../services/ratingService.js";
 
 class LeaderboardController {
   /** GET /api/leaderboard?type=game|puzzle — public, no auth needed */

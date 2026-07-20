@@ -1,6 +1,6 @@
 import { Response, NextFunction } from "express";
-import { verifyToken } from "../utils/jwt";
-import { AuthenticatedRequest } from "../utils/types";
+import { verifyToken } from "../utils/jwt.js";
+import { AuthenticatedRequest } from "../utils/types.js";
 
 class AuthMiddleware {
   static authenticate = (

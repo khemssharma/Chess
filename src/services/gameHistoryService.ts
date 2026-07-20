@@ -1,5 +1,5 @@
-import { prisma } from '../lib/prisma'
-import RatingService from './ratingService';
+import { prisma } from '../lib/prisma.js';
+import RatingService from './ratingService.js';
 
 interface SaveGameResultParams {
   gameId: string;

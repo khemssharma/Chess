@@ -8,10 +8,10 @@ import { parse, fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
 
-import AuthRouter from "./routes/authRoutes";
-import { GameManager } from "./chess/GameManager";
-import { verifyToken } from "./utils/jwt";
-import { isFrontendRoute } from "./frontendRegistry";
+import AuthRouter from "./routes/authRoutes.js";
+import { GameManager } from "./chess/GameManager.js";
+import { verifyToken } from "./utils/jwt.js";
+import { isFrontendRoute } from "./frontendRegistry.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

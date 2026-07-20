@@ -1,7 +1,7 @@
 import { Response } from "express";
-import { AuthenticatedRequest } from "../utils/types";
-import { gameHistoryService } from "../services/gameHistoryService";
-import { analyzeGame } from "../services/analysisService";
+import { AuthenticatedRequest } from "../utils/types.js";
+import { gameHistoryService } from "../services/gameHistoryService.js";
+import { analyzeGame } from "../services/analysisService.js";
 
 // In-memory cache so we don't re-analyze the same game twice
 const analysisCache = new Map<string, object>();

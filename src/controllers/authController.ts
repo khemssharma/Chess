@@ -1,6 +1,6 @@
-import AuthService from "../services/authServices";
+import AuthService from "../services/authServices.js";
 import { Request, Response } from "express";
-import { AuthenticatedRequest } from "../utils/types";
+import { AuthenticatedRequest } from "../utils/types.js";
 import jwt from "jsonwebtoken";
 
 class AuthController {
