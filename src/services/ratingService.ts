@@ -1,5 +1,5 @@
-import { prisma } from "../lib/prisma";
-import { updatePair, GlickoRating } from "./glicko2";
+import { prisma } from "../lib/prisma.js";
+import { updatePair, GlickoRating } from "./glicko2.js";
 
 interface RatedGameResult {
   gameId: string;
