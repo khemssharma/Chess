@@ -80,11 +80,17 @@ class RedisService {
       reconnectStrategy: (retries: number) => Math.min(retries * 100, 3000),
     };
 
-    this.client = createClient({
-      username: process.env.REDIS_USERNAME || undefined,
-      password: process.env.REDIS_PASSWORD || undefined,
+    const redisConfig: any = {
       socket: socketOpts,
-    }) as RedisClientType;
+    };
+    if (process.env.REDIS_PASSWORD) {
+      redisConfig.password = process.env.REDIS_PASSWORD;
+      if (process.env.REDIS_USERNAME) {
+        redisConfig.username = process.env.REDIS_USERNAME;
+      }
+    }
+
+    this.client = createClient(redisConfig) as RedisClientType;
 
     // Pub/sub requires a dedicated connection in node-redis — a client in
     // subscribe mode can't also run normal commands. `duplicate()` shares the

@@ -2,6 +2,10 @@ import { WebSocket } from "ws";
 import { Chess } from "chess.js";
 import { spawn, execFileSync, ChildProcessWithoutNullStreams } from "child_process";
 import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import {
   GAME_OVER,
   INIT_GAME,
