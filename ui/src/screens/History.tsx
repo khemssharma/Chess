@@ -1,23 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-
-const API_URL = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
-
-interface GameRecord {
-  id: string;
-  whiteUser: { id: number; username: string } | null;
-  blackUser: { id: number; username: string } | null;
-  moveCount: number;
-  timeControl: number | null;
-  status: string;
-  winner: string | null;
-  reason: string | null;
-  isVsComputer: boolean;
-  computerDifficulty: string | null;
-  startedAt: string;
-  finishedAt: string | null;
-}
+import { GameService, GameRecord } from "../services/gameService";
 
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, {
@@ -41,22 +25,18 @@ const difficultyBadgeColor: Record<string, string> = {
 };
 
 export const History = () => {
-  const { user, token, logout } = useAuth();
+  const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [games, setGames] = useState<GameRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!token) { navigate("/login"); return; }
-    fetch(`${API_URL}/api/games`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(r => r.json())
-      .then(data => setGames(data.games ?? []))
-      .catch(() => setError("Failed to load game history"))
+    GameService.getMyGames()
+      .then(data => setGames(data))
+      .catch((err) => setError(err.message || "Failed to load game history"))
       .finally(() => setLoading(false));
-  }, [token]);
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white">

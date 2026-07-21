@@ -1,15 +1,8 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { AuthService, User } from "../services/authService";
 
-const API_URL = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
 const TOKEN_KEY = "chess_auth_token";
 const USER_KEY = "chess_auth_user";
-
-interface User {
-  id: number;
-  username: string;
-  email: string;
-  avatar?: string | null;
-}
 
 interface AuthContextType {
   user: User | null;
@@ -21,21 +14,44 @@ interface AuthContextType {
   isLoading: boolean;
 }
 
-const AuthContext = createContext<AuthContextType | null>(null);
+export const AuthContext = createContext<AuthContextType | null>(null);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const logout = () => {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    localStorage.removeItem("chess_player_id");
+    localStorage.removeItem("chess_game_id");
+    setToken(null);
+    setUser(null);
+  };
+
   useEffect(() => {
-    const storedToken = localStorage.getItem(TOKEN_KEY);
-    const storedUser = localStorage.getItem(USER_KEY);
-    if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser));
-    }
-    setIsLoading(false);
+    const initializeAuth = async () => {
+      const storedToken = localStorage.getItem(TOKEN_KEY);
+      
+      if (!storedToken) {
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const userData = await AuthService.me();
+        setToken(storedToken);
+        setUser(userData);
+        localStorage.setItem(USER_KEY, JSON.stringify(userData));
+      } catch {
+        logout();
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    initializeAuth();
   }, []);
 
   const setSession = (newToken: string, userData: User) => {
@@ -46,57 +62,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const login = async (email: string, password: string) => {
-    const res = await fetch(`${API_URL}/api/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.message || "Login failed");
-    }
-    const { token: newToken } = await res.json();
-    const meRes = await fetch(`${API_URL}/api/auth/me`, {
-      headers: { Authorization: `Bearer ${newToken}` },
-    });
-    const userData: User = await meRes.json();
+    const { token: newToken, user: userData } = await AuthService.login(email, password);
     setSession(newToken, userData);
   };
 
   const googleLogin = async (accessToken: string) => {
-    const res = await fetch(`${API_URL}/api/auth/google`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ access_token: accessToken }),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.message || "Google login failed");
-    }
-    const { token: newToken, user: userData } = await res.json();
+    const { token: newToken, user: userData } = await AuthService.googleLogin(accessToken);
     setSession(newToken, userData);
   };
 
   const register = async (username: string, email: string, password: string) => {
-    const res = await fetch(`${API_URL}/api/auth/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, email, password }),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.message || "Registration failed");
-    }
-    await login(email, password);
-  };
-
-  const logout = () => {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    localStorage.removeItem("chess_player_id");
-    localStorage.removeItem("chess_game_id");
-    setToken(null);
-    setUser(null);
+    const { token: newToken, user: userData } = await AuthService.register(username, email, password);
+    setSession(newToken, userData);
   };
 
   return (

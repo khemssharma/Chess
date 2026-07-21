@@ -10,18 +10,13 @@ import { GameReplay } from './screens/GameReplay';
 import { Puzzles } from './screens/Puzzles';
 import { Leaderboard } from './screens/Leaderboard';
 
+import { ProtectedRoute } from './routes/ProtectedRoute';
+
 // Redirect authenticated users away from login/register
 const GuestOnly = ({ children }: { children: React.ReactNode }) => {
   const { user, isLoading } = useAuth();
   if (isLoading) return null;
   return user ? <Navigate to="/game" replace /> : <>{children}</>;
-};
-
-// Redirect unauthenticated users away from protected pages
-const AuthOnly = ({ children }: { children: React.ReactNode }) => {
-  const { user, isLoading } = useAuth();
-  if (isLoading) return null;
-  return !user ? <Navigate to="/login" replace /> : <>{children}</>;
 };
 
 function AppRoutes() {
@@ -33,9 +28,9 @@ function AppRoutes() {
           <Route path="/game" element={<Game />} />
           <Route path="/login" element={<GuestOnly><Login /></GuestOnly>} />
           <Route path="/register" element={<GuestOnly><Register /></GuestOnly>} />
-          <Route path="/history" element={<AuthOnly><History /></AuthOnly>} />
-          <Route path="/history/:gameId" element={<AuthOnly><GameReplay /></AuthOnly>} />
-          <Route path="/puzzles" element={<AuthOnly><Puzzles /></AuthOnly>} />
+          <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
+          <Route path="/history/:gameId" element={<ProtectedRoute><GameReplay /></ProtectedRoute>} />
+          <Route path="/puzzles" element={<ProtectedRoute><Puzzles /></ProtectedRoute>} />
           <Route path="/leaderboard" element={<Leaderboard />} />
           <Route path="*" element={<Navigate to="/game" replace />} />
         </Routes>
