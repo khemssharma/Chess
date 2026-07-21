@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-
-const API_URL = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+import { apiFetch } from "../api/apiClient";
 
 // ── Icons ──────────────────────────────────────────────────────────────────
 const SendIcon = () => (
@@ -74,7 +73,6 @@ interface Message {
 
 interface Props {
   gameId: string;
-  token: string;
   analysis: GameAnalysis;
   gameInfo: GameInfo;
   currentMoveAnalysis: MoveAnalysis | null;
@@ -201,7 +199,7 @@ function MessageBubble({ msg }: { msg: Message }) {
 
 // ── Main component ─────────────────────────────────────────────────────────
 export default function ChessAIAssistant({
-  gameId, token, analysis, gameInfo, currentMoveAnalysis
+  gameId, analysis, gameInfo, currentMoveAnalysis
 }: Props) {
   const [open, setOpen] = useState(false);
   const [minimised, setMinimised] = useState(false);
@@ -239,12 +237,8 @@ export default function ChessAIAssistant({
     }]);
 
     try {
-      const res = await fetch(`${API_URL}/api/games/${gameId}/ai-analyze`, {
+      const res = await apiFetch(`/api/games/${gameId}/ai-analyze`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({ analysis, gameInfo }),
       });
 
@@ -285,12 +279,8 @@ export default function ChessAIAssistant({
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_URL}/api/games/${gameId}/ai-chat`, {
+      const res = await apiFetch(`/api/games/${gameId}/ai-chat`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({
           message: userText,
           gameInfo,
@@ -312,7 +302,7 @@ export default function ChessAIAssistant({
     } finally {
       setLoading(false);
     }
-  }, [input, loading, token, gameId, gameInfo, currentMoveAnalysis]);
+  }, [input, loading, gameId, gameInfo, currentMoveAnalysis]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {

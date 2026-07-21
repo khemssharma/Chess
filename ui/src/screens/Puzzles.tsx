@@ -1,35 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Chess, Square } from "chess.js";
-import { useAuth } from "../context/AuthContext";
-
-const API_URL = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
-
-interface PuzzleData {
-  id: number;
-  fen: string;
-  solution: string[]; // UCI, alternating solver / opponent reply
-  playerColor: "white" | "black";
-  rating: number;
-  themes: string;
-  userPuzzleRating: number;
-}
-
-interface AttemptResult {
-  solved: boolean;
-  ratingBefore: number;
-  ratingAfter: number;
-  ratingDelta: number;
-}
-
-interface PuzzleStats {
-  puzzleRating: number;
-  provisional: boolean;
-  totalAttempts: number;
-  solved: number;
-  accuracy: number;
-  streak: number;
-}
+import { PuzzleService, PuzzleData, AttemptResult, PuzzleStats } from "../services/puzzleService";
 
 type Phase = "loading" | "solving" | "wrong" | "solved" | "failed" | "error";
 
@@ -39,7 +11,6 @@ const themeLabel: Record<string, string> = {
 };
 
 export const Puzzles = () => {
-  const { token } = useAuth();
   const chessRef = useRef(new Chess());
   const [puzzle, setPuzzle] = useState<PuzzleData | null>(null);
   const [board, setBoard] = useState(chessRef.current.board());
@@ -52,15 +23,12 @@ export const Puzzles = () => {
   const [lastMove, setLastMove] = useState<{ from: string; to: string } | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const authHeaders = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-
   const loadStats = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/puzzles/me`, { headers: authHeaders });
-      if (res.ok) setStats(await res.json());
+      const statsData = await PuzzleService.getMyStats();
+      setStats(statsData);
     } catch { /* non-critical */ }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, []);
 
   const loadPuzzle = useCallback(async () => {
     setPhase("loading");
@@ -70,24 +38,16 @@ export const Puzzles = () => {
     setSolutionIdx(0);
     setLastMove(null);
     try {
-      const res = await fetch(`${API_URL}/api/puzzles/next`, { headers: authHeaders });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setErrorMsg(body.message || "Failed to load puzzle");
-        setPhase("error");
-        return;
-      }
-      const data: PuzzleData = await res.json();
+      const data = await PuzzleService.getNextPuzzle();
       chessRef.current = new Chess(data.fen);
       setBoard(chessRef.current.board());
       setPuzzle(data);
       setPhase("solving");
-    } catch {
-      setErrorMsg("Network error");
+    } catch (err: any) {
+      setErrorMsg(err.message || "Network error");
       setPhase("error");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     loadPuzzle();
@@ -97,15 +57,9 @@ export const Puzzles = () => {
   const submitAttempt = async (solved: boolean, moves: string[]) => {
     if (!puzzle) return;
     try {
-      const res = await fetch(`${API_URL}/api/puzzles/${puzzle.id}/attempt`, {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify({ solved, moves }),
-      });
-      if (res.ok) {
-        setResult(await res.json());
-        loadStats();
-      }
+      const resultData = await PuzzleService.submitAttempt(puzzle.id, solved, moves);
+      setResult(resultData);
+      loadStats();
     } catch { /* rating update failed silently — puzzle UX still works */ }
   };
 

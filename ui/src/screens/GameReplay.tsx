@@ -3,52 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { Chess } from "chess.js";
 import ChessAIAssistant from "../components/ChessAIAssistant";
-
-const API_URL = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
-
-interface Move { from: string; to: string; promotion?: string; }
-
-interface MoveAnalysis {
-  moveIndex: number;
-  move: string;
-  san: string;
-  color: "white" | "black";
-  evalBefore: number;
-  evalAfter: number;
-  evalDelta: number;
-  bestMove: string;
-  classification: "brilliant" | "great" | "good" | "book" | "inaccuracy" | "mistake" | "blunder" | "forced";
-  comment: string;
-  isMate: boolean;
-  mateIn?: number;
-}
-
-interface GameAnalysis {
-  moves: MoveAnalysis[];
-  whiteAccuracy: number;
-  blackAccuracy: number;
-  whiteMistakes: number;
-  whiteBlunders: number;
-  blackMistakes: number;
-  blackBlunders: number;
-  whiteInaccuracies: number;
-  blackInaccuracies: number;
-}
-
-interface FullGame {
-  id: string;
-  whiteUser: { id: number; username: string } | null;
-  blackUser: { id: number; username: string } | null;
-  moveHistory: Move[];
-  moveCount: number;
-  timeControl: number | null;
-  winner: string | null;
-  reason: string | null;
-  isVsComputer: boolean;
-  computerDifficulty: string | null;
-  startedAt: string;
-  finishedAt: string | null;
-}
+import { GameService, Move, FullGame, GameAnalysis, MoveAnalysis } from "../services/gameService";
 
 const FILES = ["a", "b", "c", "d", "e", "f", "g", "h"];
 
@@ -117,13 +72,12 @@ export const GameReplay = () => {
   }, [game]);
 
   useEffect(() => {
-    if (!token) { navigate("/login"); return; }
-    fetch(`${API_URL}/api/games/${gameId}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(data => { if (data.game) setGame(data.game); else setError(data.message || "Game not found"); })
-      .catch(() => setError("Failed to load game"))
+    if (!gameId) return;
+    GameService.getGameById(gameId)
+      .then(data => setGame(data))
+      .catch((err) => setError(err.message || "Failed to load game"))
       .finally(() => setLoading(false));
-  }, [gameId, token]);
+  }, [gameId]);
 
   // Auto-play
   useEffect(() => {
@@ -164,25 +118,14 @@ export const GameReplay = () => {
   }, [stepIndex, goTo]);
 
   const requestAnalysis = async () => {
-    if (!token || analyzing) return;
+    if (!gameId || analyzing) return;
     setAnalyzing(true);
     setAnalysisError("");
     try {
-      const res = await fetch(`${API_URL}/api/games/${gameId}/analyze`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-      const data = await res.json();
-      if (data.analysis) {
-        setAnalysis(data.analysis);
-      } else {
-        setAnalysisError(data.message || "Analysis failed");
-      }
-    } catch {
-      setAnalysisError("Analysis request failed");
+      const analysisData = await GameService.analyzeGame(gameId);
+      setAnalysis(analysisData);
+    } catch (err: any) {
+      setAnalysisError(err.message || "Analysis request failed");
     } finally {
       setAnalyzing(false);
     }
@@ -628,7 +571,6 @@ export const GameReplay = () => {
       {analysis && game && token && (
         <ChessAIAssistant
           gameId={gameId!}
-          token={token}
           analysis={analysis}
           gameInfo={{
             whitePlayer: game.whiteUser?.username ?? (myColor === "white" ? user?.username ?? "White" : opponentName),

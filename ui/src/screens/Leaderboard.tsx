@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-
-const API_URL = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+import { apiFetch } from "../api/apiClient";
 
 interface Entry {
   rank: number;
@@ -26,7 +25,7 @@ export const Leaderboard = () => {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_URL}/api/leaderboard?type=${tab}`)
+    apiFetch(`/api/leaderboard?type=${tab}`)
       .then((r) => r.json())
       .then((d) => setEntries(d.leaderboard || []))
       .catch(() => setEntries([]))
