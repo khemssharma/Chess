@@ -1,0 +1,150 @@
+name: CI/CD
+
+# Deploys are gated on this workflow: chess-backend and chess-frontend both
+# have autoDeploy disabled in render.yaml, so nothing reaches Render until
+# the `e2e` job below passes on `main`. See DEPLOY_RENDER.md ("Deploy
+# gating") for the full explanation and setup steps.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chess_e2e
+  REDIS_HOST: localhost
+  REDIS_PORT: 6379
+  JWT_SECRET: e2e-test-only-secret
+  CLIENT_URL: http://localhost:3000
+  PORT: 3000
+  STOCKFISH_PATH: ./stockfish-bin
+  VITE_API_URL: http://localhost:3000
+  VITE_WS_URL: ws://localhost:3000
+
+jobs:
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chess_e2e
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      # Same download used by chess-backend's Render build (render.yaml) â
+      # keeps CI exercising the real Stockfish engine, not just the
+      # random-move fallback.
+      - name: Fetch Stockfish binary
+        run: |
+          curl -L https://github.com/official-stockfish/Stockfish/releases/download/sf_17/stockfish-ubuntu-x86-64-avx2.tar -o /tmp/sf.tar
+          tar -xf /tmp/sf.tar -C /tmp
+          cp /tmp/stockfish/stockfish-ubuntu-x86-64-avx2 ./stockfish-bin
+          chmod +x ./stockfish-bin
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      # NOTE: `prisma migrate deploy` currently fails on a clean database â
+      # the earliest committed migration (20260410121250_add_game_model)
+      # references the "User" table but no migration creates it, so the
+      # migration history in prisma/migrations/ is incomplete. That's a
+      # pre-existing issue in this repo, independent of e2e testing; `db
+      # push` sidesteps it by syncing the schema directly instead of
+      # replaying history. If the migration chain gets fixed, switch this
+      # back to `npx prisma migrate deploy` for a stricter check.
+      - name: Sync database schema
+        run: npx prisma db push --accept-data-loss
+
+      - name: Build backend
+        run: npm run build
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: ui
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: ui
+
+      - name: Start server
+        run: |
+          nohup npm start > server.log 2>&1 &
+          echo $! > server.pid
+
+      - name: Wait for server to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/ -o /dev/null; then
+              echo "Server is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Server did not become ready in time"
+          cat server.log
+          exit 1
+
+      - name: Install e2e dependencies
+        run: npm ci
+        working-directory: e2e
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+        working-directory: e2e
+
+      - name: Run Playwright e2e suite
+        run: npm test
+        working-directory: e2e
+        env:
+          E2E_BASE_URL: http://localhost:3000
+          CI: true
+
+      - name: Server log (always, for debugging)
+        if: always()
+        run: cat server.log || true
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 14
+
+  deploy:
+    name: Deploy to Render
+    needs: e2e
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger chess-backend deploy hook
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_BACKEND }}"
+
+      - name: Trigger chess-frontend deploy hook
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_FRONTEND }}"
