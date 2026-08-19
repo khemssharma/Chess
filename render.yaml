@@ -7,6 +7,7 @@ services:
     runtime: node
     region: oregon
     branch: main
+    autoDeploy: false
     # numInstances > 1 requires at least a Starter plan (Free services are
     # capped at a single instance and can't be scaled). Horizontal scaling
     # here is safe: game/matchmaking state is relayed through Redis
@@ -70,6 +71,7 @@ services:
     runtime: static
     region: oregon
     branch: main
+    autoDeploy: false
     rootDir: ui
     buildCommand: npm install && npm run build
     staticPublishPath: dist

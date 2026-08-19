@@ -57,7 +57,7 @@ jobs:
           node-version: "20"
           cache: npm
 
-      # Same download used by chess-backend's Render build (render.yaml) â
+            # Same download used by chess-backend's Render build (render.yaml) -
       # keeps CI exercising the real Stockfish engine, not just the
       # random-move fallback.
       - name: Fetch Stockfish binary
@@ -70,7 +70,7 @@ jobs:
       - name: Install backend dependencies
         run: npm ci
 
-      # NOTE: `prisma migrate deploy` currently fails on a clean database â
+            # NOTE: `prisma migrate deploy` currently fails on a clean database -
       # the earliest committed migration (20260410121250_add_game_model)
       # references the "User" table but no migration creates it, so the
       # migration history in prisma/migrations/ is incomplete. That's a
