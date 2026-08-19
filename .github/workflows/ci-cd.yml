@@ -145,6 +145,3 @@ jobs:
     steps:
       - name: Trigger chess-backend deploy hook
         run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_BACKEND }}"
-
-      - name: Trigger chess-frontend deploy hook
-        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_FRONTEND }}"
