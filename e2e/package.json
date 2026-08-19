@@ -1,0 +1,15 @@
+{
+  "name": "chess-e2e",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Playwright end-to-end tests for the Chess app. Deliberately isolated from the backend (root) and frontend (ui/) package.json files so that Render's build steps never install Playwright or download browsers.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}
