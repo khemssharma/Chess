@@ -3,7 +3,7 @@
 2. This app also features `Stockfish Game Anaysis`.
 3. Games are saved in Redis until they're being played. 
 4. Users and Games (after termination) are saved permanently in PostgreSQL.
-5. App is written completely in TypeScript.
+5. App is written completely in TypeScript..
 ## Screenshots
 ![Game](./screenshots/game.png)
 ![Analysis](./screenshots/analysis.png)
