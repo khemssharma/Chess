@@ -57,7 +57,7 @@ jobs:
           node-version: "20"
           cache: npm
 
-            # Same download used by chess-backend's Render build (render.yaml) -
+      # Same download used by chess-backend's Render build (render.yaml) -
       # keeps CI exercising the real Stockfish engine, not just the
       # random-move fallback.
       - name: Fetch Stockfish binary
@@ -70,7 +70,7 @@ jobs:
       - name: Install backend dependencies
         run: npm ci
 
-            # NOTE: `prisma migrate deploy` currently fails on a clean database -
+      # NOTE: `prisma migrate deploy` currently fails on a clean database -
       # the earliest committed migration (20260410121250_add_game_model)
       # references the "User" table but no migration creates it, so the
       # migration history in prisma/migrations/ is incomplete. That's a
@@ -145,3 +145,47 @@ jobs:
     steps:
       - name: Trigger chess-backend deploy hook
         run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_BACKEND }}"
+
+  deploy-ec2:
+    name: Deploy to EC2
+    needs: e2e
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2 over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd ~/chess
+
+            # ui/.env.production is hand-edited on this box to point at the EC2
+            # public IP instead of the Render URLs committed in the repo.
+            # Preserve it across the reset below.
+            cp ui/.env.production /tmp/env.production.ec2.bak
+
+            git fetch origin main
+            git reset --hard origin/main
+
+            cp /tmp/env.production.ec2.bak ui/.env.production
+            rm -f /tmp/env.production.ec2.bak
+
+            # Rebuild and recreate only the backend container; postgres/redis
+            # are left untouched.
+            docker compose build backend
+            docker compose up -d backend
+
+            # Root deps are installed on the host (not just inside the backend
+            # container): ui's tsc build resolves dotenv/@types/node from this
+            # parent node_modules dir while type-checking src/tests/runTests.ts.
+            npm ci
+
+            cd ui
+            npm ci
+            npm run build
+            rsync -a --delete dist/ /var/www/chess-frontend/
+
+            echo "Deployed $(git rev-parse --short HEAD) to EC2"
