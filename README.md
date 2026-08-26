@@ -1,11 +1,14 @@
 ## Features
-1. Play it here: [chess.ayushweb.online](https://chess.ayushweb.online/)
-2. Features plaing with a computer or with a friend online.
-3. This app also features `Stockfish Game Anaysis`.
-4. Games are saved in Redis until they're being played. 
-5. Users and Games (after termination) are saved permanently in PostgreSQL.
-6. App is written completely in TypeScript
+1. Play it here:
+   [AWS EC2 instance](http://65.0.131.22/)
+   [chess.ayushweb.online](https://chess.ayushweb.online/)
+3. Features playing with a computer or with a friend online.
+4. This app also features `Stockfish Game Anaysis`.
+5. Games are saved in Redis until they're being played. 
+6. Users and Games (after termination) are saved permanently in PostgreSQL.
+7. App is written completely in TypeScript
 ## Screenshots
+![Chess](./screenshots/ai.png)
 ![Game](./screenshots/game.png)
 ![Analysis](./screenshots/analysis.png)
 ![History](./screenshots/game_history.png)
