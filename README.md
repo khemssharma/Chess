@@ -1,6 +1,6 @@
 ## Features
 1. Play it here:
--  [AWS EC2 instance](http://65.0.131.22/)
+-  [AWS EC2 instance](http://65.0.131.22.nip.io/)
 -  [chess.ayushweb.online](https://chess.ayushweb.online/)
 2. Features playing with a computer or with a friend online.
 3. This app also features `Stockfish Game Anaysis`.
