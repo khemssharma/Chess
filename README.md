@@ -1,6 +1,6 @@
 ## Features
 1. Play it here: [chess.ayushweb.online](https://chess.ayushweb.online/) (AWS EC2 instance)
-2. Features playing with a computer or with a friend online.
+2. Features play with computer and multiplayer mode.
 3. This app also features `Stockfish Game Anaysis`.
 4. Games are saved in Redis until they're being played. 
 5. Users and Games (after termination) are saved permanently in PostgreSQL.
