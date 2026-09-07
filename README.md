@@ -16,7 +16,6 @@
 
 DEPLOY_RENDER.md contains deployment instructions.
 
-
 ## Contribution
 (We welcome contributions! Please follow these steps to contribute to this project:)
 
