@@ -12,6 +12,7 @@ import AuthRouter from "./routes/authRoutes.js";
 import { GameManager } from "./chess/GameManager.js";
 import { verifyToken } from "./utils/jwt.js";
 import { isFrontendRoute } from "./frontendRegistry.js";
+import { redisService } from "./chess/RedisService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -90,6 +91,9 @@ const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
 const gameManager = new GameManager();
+const WS_MAX_PER_IP = Number.parseInt(process.env.WS_MAX_CONNECTIONS_PER_IP ?? "20", 10);
+const WS_MAX_PER_USER = Number.parseInt(process.env.WS_MAX_CONNECTIONS_PER_USER ?? "5", 10);
+const WS_CONNECTION_TTL_SECONDS = 2 * 60 * 60;
 console.log(
   `Game routing instance id: ${gameManager.id}` +
     (process.env.REDIS_HOST
@@ -97,8 +101,12 @@ console.log(
       : " (Redis disabled — matches/reconnects only work within THIS single instance)")
 );
 
-wss.on("connection", (ws: WebSocket, req) => {
+wss.on("connection", async (ws: WebSocket, req) => {
   let dbUserId: number | null = null;
+  const forwardedFor = req.headers["x-forwarded-for"];
+  const ip = (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor?.split(",")[0])?.trim()
+    || req.socket.remoteAddress
+    || "unknown";
 
   try {
     const { query } = parse(req.url || "", true);
@@ -112,11 +120,35 @@ wss.on("connection", (ws: WebSocket, req) => {
       console.log("Anonymous WS connection (no token provided)");
     }
   } catch {
-    console.log("WS connection with invalid token — treating as guest");
+    console.log("WS connection rejected — invalid token");
+    ws.close(1008, "Invalid authentication token");
+    return;
+  }
+
+  const identityKey = dbUserId !== null ? `user:${dbUserId}` : `ip:${ip}`;
+  const maxConnections = dbUserId !== null ? WS_MAX_PER_USER : WS_MAX_PER_IP;
+
+  if (!Number.isFinite(maxConnections) || maxConnections <= 0) {
+    ws.close(1013, "WebSocket connections temporarily unavailable");
+    return;
+  }
+
+  const acquired = await redisService.tryAcquireWsConnection(
+    identityKey,
+    maxConnections,
+    WS_CONNECTION_TTL_SECONDS
+  );
+
+  if (!acquired) {
+    ws.close(1008, "Too many WebSocket connections");
+    return;
   }
 
   gameManager.addUser(ws, dbUserId);
-  ws.on("close", () => gameManager.removeUser(ws));
+  ws.on("close", () => {
+    gameManager.removeUser(ws);
+    void redisService.releaseWsConnection(identityKey);
+  });
 });
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
