@@ -120,11 +120,35 @@ wss.on("connection", async (ws: WebSocket, req) => {
       console.log("Anonymous WS connection (no token provided)");
     }
   } catch {
-    console.log("WS connection with invalid token — treating as guest");
+    console.log("WS connection rejected — invalid token");
+    ws.close(1008, "Invalid authentication token");
+    return;
+  }
+
+  const identityKey = dbUserId !== null ? `user:${dbUserId}` : `ip:${ip}`;
+  const maxConnections = dbUserId !== null ? WS_MAX_PER_USER : WS_MAX_PER_IP;
+
+  if (!Number.isFinite(maxConnections) || maxConnections <= 0) {
+    ws.close(1013, "WebSocket connections temporarily unavailable");
+    return;
+  }
+
+  const acquired = await redisService.tryAcquireWsConnection(
+    identityKey,
+    maxConnections,
+    WS_CONNECTION_TTL_SECONDS
+  );
+
+  if (!acquired) {
+    ws.close(1008, "Too many WebSocket connections");
+    return;
   }
 
   gameManager.addUser(ws, dbUserId);
-  ws.on("close", () => gameManager.removeUser(ws));
+  ws.on("close", () => {
+    gameManager.removeUser(ws);
+    void redisService.releaseWsConnection(identityKey);
+  });
 });
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
