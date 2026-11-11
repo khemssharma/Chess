@@ -273,6 +273,34 @@ class RedisService {
   // ── Cross-instance pub/sub ──────────────────────────────────────────────────
 
   /** Deliver `message` to whichever instance (if any) holds playerId's live socket. */
+  async tryAcquireWsConnection(key: string, limit: number, ttlSeconds: number): Promise<boolean> {
+    try {
+      await this.waitReady();
+      const redisKey = `ws:connections:${key}`;
+      const count = await this.client!.incr(redisKey);
+      if (count === 1) await this.client!.expire(redisKey, ttlSeconds);
+      if (count <= limit) return true;
+
+      const after = await this.client!.decr(redisKey);
+      if (after <= 0) await this.client!.del(redisKey);
+      return false;
+    } catch (err) {
+      console.error("Redis tryAcquireWsConnection failed (failing closed):", err);
+      return false;
+    }
+  }
+
+  async releaseWsConnection(key: string): Promise<void> {
+    try {
+      await this.waitReady();
+      const redisKey = `ws:connections:${key}`;
+      const count = await this.client!.decr(redisKey);
+      if (count <= 0) await this.client!.del(redisKey);
+    } catch (err) {
+      console.error("Redis releaseWsConnection failed:", err);
+    }
+  }
+
   async publishToPlayer(playerId: string, gameId: string, message: unknown): Promise<void> {
     if (!this.client) return; // no Redis = single instance, nothing to relay
     try {
