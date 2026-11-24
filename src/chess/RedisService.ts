@@ -301,6 +301,33 @@ class RedisService {
     }
   }
 
+  async rateLimit(
+    key: string,
+    limit: number,
+    windowMs: number
+  ): Promise<{ allowed: boolean; remaining: number; retryAfterMs: number }> {
+    if (!this.client) {
+      return { allowed: true, remaining: limit, retryAfterMs: 0 };
+    }
+    try {
+      await this.waitReady();
+      const redisKey = `ratelimit:${key}`;
+      const count = await this.client.incr(redisKey);
+      if (count === 1) {
+        await this.client.pExpire(redisKey, windowMs);
+      }
+      const pttl = await this.client.pTTL(redisKey);
+      const retryAfterMs = pttl > 0 ? pttl : windowMs;
+      if (count <= limit) {
+        return { allowed: true, remaining: Math.max(0, limit - count), retryAfterMs: 0 };
+      }
+      return { allowed: false, remaining: 0, retryAfterMs };
+    } catch (err) {
+      console.error("Redis rateLimit failed (failing open):", err);
+      return { allowed: true, remaining: limit, retryAfterMs: 0 };
+    }
+  }
+
   async publishToPlayer(playerId: string, gameId: string, message: unknown): Promise<void> {
     if (!this.client) return; // no Redis = single instance, nothing to relay
     try {

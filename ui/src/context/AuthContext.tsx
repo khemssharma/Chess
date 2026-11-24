@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { AuthService, User } from "../services/authService";
+import { getTokenExpiration, isTokenExpired } from "../utils/jwt";
 
 const TOKEN_KEY = "chess_auth_token";
 const USER_KEY = "chess_auth_user";
@@ -21,20 +22,27 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     localStorage.removeItem("chess_player_id");
     localStorage.removeItem("chess_game_id");
     setToken(null);
     setUser(null);
-  };
+  }, []);
 
   useEffect(() => {
     const initializeAuth = async () => {
       const storedToken = localStorage.getItem(TOKEN_KEY);
       
       if (!storedToken) {
+        setIsLoading(false);
+        return;
+      }
+
+      // If stored token is already expired, log out immediately without an unnecessary API call
+      if (isTokenExpired(storedToken)) {
+        logout();
         setIsLoading(false);
         return;
       }
@@ -52,7 +60,59 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     };
 
     initializeAuth();
-  }, []);
+  }, [logout]);
+
+  // Proactive token expiration timer and wake-up/tab visibility listener
+  useEffect(() => {
+    if (!token) return;
+
+    if (isTokenExpired(token)) {
+      logout();
+      return;
+    }
+
+    const exp = getTokenExpiration(token);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    if (exp !== null) {
+      const remainingMs = exp - Date.now();
+      if (remainingMs <= 0) {
+        logout();
+        return;
+      }
+      timer = setTimeout(() => {
+        logout();
+      }, remainingMs);
+    }
+
+    const checkExpiry = () => {
+      if (isTokenExpired(token)) {
+        logout();
+      }
+    };
+
+    document.addEventListener("visibilitychange", checkExpiry);
+    window.addEventListener("focus", checkExpiry);
+    const interval = setInterval(checkExpiry, 30_000);
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", checkExpiry);
+      window.removeEventListener("focus", checkExpiry);
+    };
+  }, [token, logout]);
+
+  // Listen for unauthorized 401 events dispatched by API client or WebSocket
+  useEffect(() => {
+    const handleAuthLogout = () => {
+      logout();
+    };
+    window.addEventListener("auth:logout", handleAuthLogout);
+    return () => {
+      window.removeEventListener("auth:logout", handleAuthLogout);
+    };
+  }, [logout]);
 
   const setSession = (newToken: string, userData: User) => {
     localStorage.setItem(TOKEN_KEY, newToken);
