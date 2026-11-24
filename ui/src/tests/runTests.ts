@@ -117,6 +117,7 @@ async function run() {
   await import("./apiClient.test");
   await import("./authService.test");
   await import("./ProtectedRoute.test");
+  await import("./jwt.test");
 
   console.log(`\n🚀 Starting custom test suite execution (${tests.length} tests registered)\n`);
 

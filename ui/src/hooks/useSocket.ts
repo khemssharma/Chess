@@ -21,7 +21,12 @@ export const useSocket = () => {
     const ws = new WebSocket(url);
 
     ws.onopen = () => setSocket(ws);
-    ws.onclose = () => setSocket(null);
+    ws.onclose = (event: CloseEvent) => {
+      if (event.code === 1008 && token && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        window.dispatchEvent(new CustomEvent("auth:logout"));
+      }
+      setSocket(null);
+    };
 
     return () => ws.close();
   }, [token, isLoading]); // Reconnect when auth state changes

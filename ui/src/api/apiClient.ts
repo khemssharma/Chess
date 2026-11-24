@@ -38,6 +38,10 @@ export async function apiFetch(
     localStorage.removeItem("chess_player_id");
     localStorage.removeItem("chess_game_id");
 
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new CustomEvent("auth:logout"));
+    }
+
     // Redirect to login if we are not already on the login or register pages
     const path = window.location.pathname;
     if (path !== "/login" && path !== "/register") {
