@@ -41,6 +41,7 @@ export const Game = () => {
     const [winner, setWinner] = useState<string | null>(null);
     const [gameOverReason, setGameOverReason] = useState<string | null>(null);
     const [searching, setSearching] = useState(false);
+    const [startingGame, setStartingGame] = useState(false);
     const [selectedTimeControl, setSelectedTimeControl] = useState<number | null>(null);
     const [reconnecting, setReconnecting] = useState(false);
     const [whiteTime, setWhiteTime] = useState<number | null>(null);
@@ -84,6 +85,7 @@ export const Game = () => {
                     setChess(newChess);
                     setBoard(newChess.board());
                     setStarted(true);
+                    setStartingGame(false);
                     setSearching(false);
                     setReconnecting(false);
                     setPlayerColor(message.payload.color);
@@ -108,6 +110,7 @@ export const Game = () => {
                     setChess(restored);
                     setBoard(restored.board());
                     setStarted(true);
+                    setStartingGame(false);
                     setSearching(false);
                     setReconnecting(false);
                     setPlayerColor(message.payload.yourColor);
@@ -202,6 +205,7 @@ export const Game = () => {
         setGameOverReason(null);
         setSearching(false);
         setSelectedTimeControl(null);
+        setStartingGame(false);
         setWhiteTime(null);
         setBlackTime(null);
         setReconnecting(false);
@@ -228,6 +232,7 @@ export const Game = () => {
     }, [liveMoves]);
 
     const startComputerGame = (timeControl: number | null) => {
+        setStartingGame(true);
         const color = selectedColor === "random"
             ? (Math.random() < 0.5 ? "white" : "black")
             : selectedColor;
@@ -431,7 +436,7 @@ export const Game = () => {
                                 </div>
                             )}
 
-                            {!started && !searching && !reconnecting && (
+                            {!started && !searching && !startingGame && !reconnecting && (
                                 <div className="space-y-4">
                                     {/* Mode selector */}
                                     {gameMode === null && (
@@ -548,9 +553,9 @@ export const Game = () => {
                                 </div>
                             )}
 
-                            {searching && (
+                            {(searching || startingGame) && (
                                 <div className="text-white text-center">
-                                    <div className="mb-4 text-lg">Looking for opponent...</div>
+                                    <div className="mb-4 text-lg">{startingGame ? "Starting Game..." : "Looking for opponent..."}</div>
                                     {selectedTimeControl && (
                                         <div className="mb-2 text-sm text-gray-400">{selectedTimeControl} minute game</div>
                                     )}
