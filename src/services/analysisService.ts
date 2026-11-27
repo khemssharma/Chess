@@ -184,16 +184,13 @@ async function getStockfishEval(
             // `score mate 0` means the side to move is already checkmated, so the
             // other side delivered mate. Record it as mate in 1 for the winner:
             // mateIn 0 would be falsy for the `mateIn && ...` checks in the
-                        // comment, gauge and label code, and `score` would always read as a
-                        // Black win (-30000) even when White delivered mate.
-            mateIn =
-                            mateRelative === 0
-                            ? sideToMove === "white"
-                                ? -1
-                                : 1
-                              : sideToMove === "white"
-                              ? mateRelative
-                                : -mateRelative;
+            // comment, gauge and label code, and `score` would always read as a
+            // Black win (-30000) even when White delivered mate.
+            if (mateRelative === 0) {
+              mateIn = sideToMove === "white" ? -1 : 1;
+            } else {
+              mateIn = sideToMove === "white" ? mateRelative : -mateRelative;
+            }
             score = mateIn > 0 ? 30000 : -30000;
           } else {
             const cpMatch = line.match(/score cp (-?\d+)/);
